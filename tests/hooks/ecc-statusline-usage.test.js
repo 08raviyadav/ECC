@@ -29,3 +29,32 @@ test('actual statusline usage display is opt-in and leaves provider settings alo
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+for (const hasSelectedPlugins of [true, false]) {
+  test(`selected Claude profile plugin metadata ${hasSelectedPlugins ? 'is displayed' : 'never borrows the default'}`, () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-statusline-profile-'));
+    try {
+      const selected = path.join(home, 'selected-profile');
+      const writePlugins = (directory, id) => {
+        fs.mkdirSync(path.join(directory, 'plugins'), { recursive: true });
+        fs.writeFileSync(path.join(directory, 'plugins', 'installed_plugins.json'),
+          JSON.stringify({ version: 2, plugins: { [id]: [{ version: '7.8.9' }] } }));
+        fs.writeFileSync(path.join(directory, 'settings.json'),
+          JSON.stringify({ enabledPlugins: { [id]: true } }));
+      };
+      writePlugins(path.join(home, '.claude'), 'default-profile-marker@fixture');
+      if (hasSelectedPlugins) writePlugins(selected, 'selected-profile-marker@fixture');
+      const child = spawnSync(process.execPath, [path.resolve(__dirname, '../../scripts/hooks/ecc-statusline.js')], {
+        input: JSON.stringify({ model: { display_name: 'Claude fixture' } }),
+        encoding: 'utf8', timeout: 5000,
+        env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: selected,
+          ECC_STATUSLINE_USAGE: '1', ECC_BAR_GLYPHS: 'ascii' },
+      });
+      assert.equal(child.status, 0, child.stderr);
+      assert.doesNotMatch(child.stdout, /default-profile-marker/);
+      if (hasSelectedPlugins) assert.match(child.stdout, /selected-profile-marker/);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+}

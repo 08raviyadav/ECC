@@ -30,6 +30,9 @@ function portFromEnv(name, fallback) {
 
 const listenPort = portFromEnv('ECC_RELAY_LISTEN', 1456);
 const targetPort = portFromEnv('ECC_RELAY_TARGET', 1455);
+if (listenPort === targetPort) {
+  throw new Error('ECC_RELAY_LISTEN and ECC_RELAY_TARGET must differ');
+}
 
 net.createServer(client => {
   const upstream = net.connect(targetPort, '127.0.0.1');
