@@ -84,7 +84,7 @@ test('exhausted snapshot numbering refuses creation before initializing evolutio
   const last = path.join(versionsDir, `v${Number.MAX_SAFE_INTEGER}.md`);
   fs.writeFileSync(last, 'preserve');
   assert.throws(() => versioning.createVersion(skillDir), /snapshot version range is exhausted/);
-  assert.deepEqual(fs.readdirSync(versionsDir), [`v${Number.MAX_SAFE_INTEGER}.md`]);
+  assert.deepEqual(fs.readdirSync(versionsDir).sort(), [`v${Number.MAX_SAFE_INTEGER}.md`]);
   assert.equal(fs.readFileSync(last, 'utf8'), 'preserve');
   assert.equal(fs.existsSync(versioning.getEvolutionDir(skillDir)), false);
 });
@@ -149,7 +149,7 @@ test('rollback initialization failure preserves unsnapshotted live bytes and the
   assert.throws(() => versioning.rollbackTo(skillDir, 1), error => Boolean(error.code));
   assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), '# Original\n');
   assert.equal(fs.readFileSync(target, 'utf8'), '# Saved target\n');
-  assert.deepEqual(fs.readdirSync(versionsDir), ['v1.md']);
+  assert.deepEqual(fs.readdirSync(versionsDir).sort(), ['v1.md']);
   assert.equal(fs.readFileSync(versioning.getEvolutionDir(skillDir), 'utf8'), 'owned blocker');
 });
 
@@ -172,7 +172,7 @@ test('rollback exclusive publication failure preserves live bytes and permits a 
   }
   assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), '# Unsnapshotted work\n');
   assert.equal(fs.readFileSync(path.join(versionsDir, 'v1.md'), 'utf8'), '# Original\n');
-  assert.deepEqual(fs.readdirSync(versionsDir), ['v1.md']);
+  assert.deepEqual(fs.readdirSync(versionsDir).sort(), ['v1.md']);
   assert.equal(fs.readFileSync(amendmentPath, 'utf8'), priorLog);
   const restored = versioning.rollbackTo(skillDir, 1);
   assert.equal(restored.version, 2);
@@ -199,7 +199,7 @@ test('failed live rollback write preserves version and applied history, then ret
     fs.writeFileSync = writeFileSync;
   }
   assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), '# Unsnapshotted work\n');
-  assert.deepEqual(fs.readdirSync(versionsDir), ['v1.md']);
+  assert.deepEqual(fs.readdirSync(versionsDir).sort(), ['v1.md']);
   assert.equal(versioning.getCurrentVersion(skillDir), 1);
   assert.equal(fs.readFileSync(logPath, 'utf8'), priorLog);
   const report = health.collectSkillHealth({ skillsRoot: path.join(root, 'skills'), homeDir: root });
@@ -280,7 +280,7 @@ test('exclusive snapshot publication preserves a path occupied after allocation'
   }
   assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), '# Unsnapshotted work\n');
   assert.equal(fs.readFileSync(target, 'utf8'), '# Foreign snapshot\n');
-  assert.deepEqual(fs.readdirSync(versionsDir), ['v1.md', 'v2.md']);
+  assert.deepEqual(fs.readdirSync(versionsDir).sort(), ['v1.md', 'v2.md']);
   assert.equal(versioning.getEvolutionLog(skillDir, 'amendments').filter(row => row.event === 'rollback').length, 0);
 });
 
@@ -311,6 +311,44 @@ test('snapshot staging cleanup preserves foreign entries and permits a clean lat
   assert.equal(fs.readFileSync(restored.path, 'utf8'), fs.readFileSync(live, 'utf8'));
   assert.equal(fs.readFileSync(foreignPath, 'utf8'), 'foreign work');
 });
+
+for (const foreign of [false, true]) {
+test(`unverified staging directory identity preserves ${foreign ? 'foreign contents' : 'empty directory'} with a pending diagnostic`, fixture => {
+  const { skillDir, versionsDir } = fixture;
+  versioning.createVersion(skillDir);
+  fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Unsnapshotted work\n');
+  const logPath = versioning.getEvolutionLogPath(skillDir, 'amendments');
+  const priorLog = fs.readFileSync(logPath, 'utf8');
+  const lstatSync = fs.lstatSync;
+  let stagingDir;
+  const primary = Object.assign(new Error('Injected staging identity failure'), { code: 'EIO' });
+  fs.lstatSync = (file, ...args) => {
+    if (path.basename(file).startsWith('.snapshot-')) {
+      stagingDir = file;
+      if (foreign) fs.writeFileSync(path.join(file, 'foreign-owned.txt'), 'preserve');
+      throw primary;
+    }
+    return lstatSync(file, ...args);
+  };
+  try {
+    assert.throws(() => versioning.rollbackTo(skillDir, 1), error =>
+      error.primaryError === primary && /identity could not be verified/.test(error.message) && /recovery is pending/.test(error.message));
+  } finally {
+    fs.lstatSync = lstatSync;
+  }
+  if (foreign) assert.equal(fs.readFileSync(path.join(stagingDir, 'foreign-owned.txt'), 'utf8'), 'preserve');
+  else assert.deepEqual(fs.readdirSync(stagingDir), []);
+  assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), '# Unsnapshotted work\n');
+  assert.equal(fs.existsSync(path.join(versionsDir, 'v2.md')), false);
+  assert.equal(versioning.getCurrentVersion(skillDir), 1);
+  assert.equal(fs.readFileSync(logPath, 'utf8'), priorLog);
+  const restored = versioning.rollbackTo(skillDir, 1);
+  assert.equal(restored.version, 2);
+  if (foreign) assert.equal(fs.readFileSync(path.join(stagingDir, 'foreign-owned.txt'), 'utf8'), 'preserve');
+  else assert.deepEqual(fs.readdirSync(stagingDir), []);
+});
+
+}
 
 test('successful rollback snapshots restored content and retains earlier targets for another rollback', fixture => {
   const { skillDir } = fixture;

@@ -231,14 +231,26 @@ function removeOwnedStaging(staging, contentIdentity) {
   fs.rmdirSync(staging.path);
 }
 
+function prepareStaging(versionsDir) {
+  const stagingDir = fs.mkdtempSync(path.join(versionsDir, '.snapshot-'));
+  try {
+    return { path: stagingDir, contentPath: path.join(stagingDir, 'content.md'), identity: fs.lstatSync(stagingDir) };
+  } catch (primaryError) {
+    const recoveryError = new Error(`Staging directory identity could not be verified; preserved ${stagingDir}`);
+    const error = new Error(`${primaryError.message}; ${recoveryError.message}; recovery is pending`, { cause: primaryError });
+    error.primaryError = primaryError;
+    error.recoveryError = recoveryError;
+    throw error;
+  }
+}
+
 function publishVersion(skillPath, skillContent, options) {
   ensureSkillExists(skillPath);
   const nextVersion = allocateSnapshotVersion(skillPath);
   const versionsDir = getVersionsDir(skillPath);
   ensureSkillVersioning(skillPath);
-  const stagingDir = fs.mkdtempSync(path.join(versionsDir, '.snapshot-'));
-  const stagedPath = path.join(stagingDir, 'content.md');
-  const staging = { path: stagingDir, contentPath: stagedPath, identity: fs.lstatSync(stagingDir) };
+  const staging = prepareStaging(versionsDir);
+  const stagedPath = staging.contentPath;
   const snapshotPath = path.join(versionsDir, `v${nextVersion}.md`);
   const createdAt = options.timestamp || new Date().toISOString();
   let snapshot;
