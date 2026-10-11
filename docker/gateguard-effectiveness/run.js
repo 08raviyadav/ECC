@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { ARMS, DEFAULT_ARMS, resolveRef, materializeTree, armSettings } = require('./arms');
-const { loadScenarios, schedule, runTrial, summarize, renderMarkdown } = require('./lib');
+const { loadScenarios, schedule, runTrial, summarize, renderMarkdown, completedTrialKeys } = require('./lib');
 
 const REPO_ROOT = path.join(__dirname, '..', '..');
 
@@ -167,7 +167,8 @@ function main() {
       const treeRoots = {};
       for (const [name, sha] of Object.entries(trees)) treeRoots[name] = materializeTree(REPO_ROOT, sha, path.join(workRoot, 'trees', name));
       const armSettingsByName = Object.fromEntries(options.arms.map(arm => [arm, armSettings(ARMS[arm].gate ? treeRoots[ARMS[arm].tree] : null)]));
-      const done = new Set(rows.map(row => row.key));
+      // Failed attempts stay in results.jsonl for audit; a key is done only once a valid trial is recorded.
+      const done = completedTrialKeys(rows);
       const trials = schedule(scenarios, options.arms, options.reps, options.seed).filter(trial => !done.has(trial.key));
       process.stderr.write(`${trials.length} trials to run (${done.size} already recorded)\n`);
       if (options.dryRun) {
@@ -192,7 +193,10 @@ function main() {
           timeoutMs: options.timeoutMin * 60000,
           execute
         });
-        fs.writeFileSync(path.join(options.out, 'transcripts', `${trial.key.replace(/\//g, '__')}.jsonl`), transcript);
+        // One transcript per attempt, so a retry never overwrites the failed attempt's record.
+        row.attemptId = crypto.randomUUID();
+        row.transcript = `transcripts/${trial.key.replace(/\//g, '__')}__${row.attemptId}.jsonl`;
+        fs.writeFileSync(path.join(options.out, row.transcript), transcript);
         fs.rmSync(path.join(workRoot, trial.key.replace(/\//g, '__')), { recursive: true, force: true });
         if (row.providerError && /authenticat|log ?in|oauth/i.test(row.providerMessage || '')) {
           throw new Error(`${trial.key}: Claude is not signed in (${row.providerMessage}); sign in with the claude CLI and rerun with the same --out`);
