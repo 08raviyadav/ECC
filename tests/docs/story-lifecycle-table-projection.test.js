@@ -57,6 +57,28 @@ function assertStable(root, rel, expected) {
 }
 
 const tests = [
+  ...['epic', 'sprint'].flatMap(kind => ['apply', 'reconcile'].flatMap(command => ['', '\n'].map(gap => [
+    `${command} preserves a handwritten ${kind} table below an empty marker with gap ${JSON.stringify(gap)}`, () => {
+      const root = newRepo();const rel = kind === 'epic' ? 'epics/auth-flow.md' : 'sprints/sprint-1.md';
+      const prefix = kind === 'epic' ? PREFIX : '# Sprint 1\n\n';
+      const handwritten = '| Owner | Note |\n| --- | --- |\n| User | Keep every byte |\n';
+      const suffix = `${gap}${handwritten}${SUFFIX}${kind === 'sprint' ? '\n## Total Points: 0\n' : ''}`;
+      write(root, rel, `${prefix}${MARKER}\n${suffix}`);
+      if (command === 'apply') {
+        const [id] = run(root, ['allocate', '--epic', 'auth-flow']).ids;
+        apply(root, { create: { [`${id}.md`]: story(id) } });
+      } else run(root, ['reconcile']);
+      const actual = read(root, rel);assert.ok(actual.endsWith(suffix), 'handwritten table and prose must remain byte-identical');
+      assert.equal(actual.split(handwritten).length, 2);assertStable(root, rel, actual);
+    },
+  ]))),
+  ['an unrelated table immediately after derived rows survives repeat transitions', () => {
+    const root = newRepo();const [id] = run(root, ['allocate', '--epic', 'auth-flow']).ids;
+    const user = '| Owner | Note |\n| --- | --- |\n| User | Keep |\n';
+    write(root, 'epics/auth-flow.md', `${PREFIX}${MARKER}\n${EPIC_HEADER}\n${user}${SUFFIX}`);
+    apply(root, { create: { [`${id}.md`]: story(id) } });
+    assertStable(root, 'epics/auth-flow.md', `${PREFIX}${MARKER}\n${EPIC_HEADER}\n| ${id} | Sign in | todo |\n${user}${SUFFIX}`);
+  }],
   ['an EOF marker without a newline appends its table after the marker', () => {
     const root = newRepo();
     write(root, 'epics/auth-flow.md', `${PREFIX}${MARKER}`);

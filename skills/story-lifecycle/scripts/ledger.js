@@ -261,6 +261,9 @@ function recover(dir) {
       }
       rolledBack++;
     }
+    // Restoration is complete. Cleanup failure must never repeat a completed
+    // rollback after another owner has changed a restored file.
+    fs.rmSync(journalPath);
   }
   fs.rmSync(txn, { recursive: true, force: true });
   return rolledBack;
@@ -293,17 +296,22 @@ function replaceTable(md, rel, header, rows) {
   const skipBlanks = (at) => at + (md.slice(at).match(/^(?:[ \t]*\r?\n)+/) || [''])[0].length;
   const hasDerivedHeader = (at) => md.slice(at).split(/\r?\n/, 2).join('\n').replace(/[ \t]/g, '') === header.replace(/[ \t]/g, '');
   const first = skipBlanks(afterMarker);
-  const start = md[first] === '|' ? first : afterMarker;
+  const start = hasDerivedHeader(first) ? first : afterMarker;
   let end = start;
-  while (md[end] === '|') {
-    while (md[end] === '|') { const nl = md.indexOf('\n', end); end = nl < 0 ? md.length : nl + 1; }
+  while (hasDerivedHeader(end)) {
+    while (md[end] === '|') {
+      const nextLine = md.slice(end).split(/\r?\n/, 2)[1] || '';
+      if (end !== start && /^\|(?:\s*:?-{3,}:?\s*\|)+\s*$/.test(nextLine) && !hasDerivedHeader(end)) break;
+      const nl = md.indexOf('\n', end); end = nl < 0 ? md.length : nl + 1;
+    }
     // Older projections could insert a second table before a blank-separated
     // original. Only adjacent copies of this derived header belong to us.
     const next = skipBlanks(end);
     if (!hasDerivedHeader(next)) break;
     end = next;
   }
-  return md.slice(0, start) + (newline < 0 ? '\n' : '') + [header, ...rows].join('\n') + '\n' + md.slice(end);
+  const separator = start === end && md[start] === '|' ? '\n' : '';
+  return md.slice(0, start) + (newline < 0 ? '\n' : '') + [header, ...rows].join('\n') + '\n' + separator + md.slice(end);
 }
 
 // Read the ledger with pending changes overlaid; return regenerated epic/sprint files that differ.
@@ -377,38 +385,7 @@ function allocate(root, dir, epic, count) {
   return { ids };
 }
 
-// changes: { create: { rel: content }, update: { rel: content } }
-function apply(root, dir, changes) {
-  const keys = new Set();
-  const normalize = (obj = {}) => Object.fromEntries(Object.entries(obj).map(([rel, content]) => {
-    const key = rel.replace(/\\/g, '/');
-    if (keys.has(key)) throw new LedgerError(`duplicate path in batch: ${key}`);
-    keys.add(key);
-    return [key, content];
-  }));
-  const create = normalize(changes.create);
-  const update = normalize(changes.update);
-  const reg = registryDir(root, dir);
-  for (const rel of Object.keys(create)) {
-    if (fs.existsSync(resolveLedgerPath(dir, rel))) throw new LedgerError(`refusing to overwrite existing ${rel}`, 4);
-    const m = rel.match(STORY_FILE);
-    if (m && !fs.existsSync(path.join(reg, `${m[1]}-${m[2]}`))) throw new LedgerError(`${rel}: story ID was not allocated`);
-    if (m && parseStory(rel, create[rel]).status !== 'todo') throw new LedgerError(`${rel}: new stories start as todo`);
-  }
-  for (const rel of Object.keys(update)) {
-    const abs = resolveLedgerPath(dir, rel);
-    if (!fs.existsSync(abs)) throw new LedgerError(`cannot update missing ${rel}`);
-    if (!STORY_FILE.test(rel)) continue;
-    const from = parseStory(rel, readRegular(abs, 'utf8')).status;
-    const to = parseStory(rel, update[rel]).status;
-    if (to !== from && STATUSES.indexOf(to) !== STATUSES.indexOf(from) + 1) {
-      throw new LedgerError(`${rel}: status ${from} -> ${to} is not allowed; status moves forward one step at a time`);
-    }
-  }
-  const pending = { ...create, ...update };
-  const all = { ...pending, ...project(dir, pending).derived };
-  const txn = path.join(dir, '.txn');
-  fs.mkdirSync(txn, { mode: 0o700 });
+function publishTransaction(dir, txn, all, create) {
   const entries = Object.keys(all).map((rel, i) => {
     const existed = fs.existsSync(resolveLedgerPath(dir, rel));
     if (rel in create && existed) throw new LedgerError(`refusing to overwrite existing ${rel}`, 4);
@@ -440,6 +417,70 @@ function apply(root, dir, changes) {
   return { ok: true, written: entries.map((e) => e.path) };
 }
 
+// changes: { create: { rel: content }, update: { rel: content } }
+function apply(root, dir, changes) {
+  const keys = new Set();
+  const normalize = (obj = {}) => Object.fromEntries(Object.entries(obj).map(([rel, content]) => {
+    const key = rel.replace(/\\/g, '/');
+    if (keys.has(key)) throw new LedgerError(`duplicate path in batch: ${key}`);
+    keys.add(key);
+    return [key, content];
+  }));
+  const create = normalize(changes.create);
+  const update = normalize(changes.update);
+  const reg = registryDir(root, dir);
+  for (const rel of Object.keys(create)) {
+    if (fs.existsSync(resolveLedgerPath(dir, rel))) throw new LedgerError(`refusing to overwrite existing ${rel}`, 4);
+    const m = rel.match(STORY_FILE);
+    if (m && !fs.existsSync(path.join(reg, `${m[1]}-${m[2]}`))) throw new LedgerError(`${rel}: story ID was not allocated`);
+    if (m && parseStory(rel, create[rel]).status !== 'todo') throw new LedgerError(`${rel}: new stories start as todo`);
+  }
+  for (const rel of Object.keys(update)) {
+    const abs = resolveLedgerPath(dir, rel);
+    if (!fs.existsSync(abs)) throw new LedgerError(`cannot update missing ${rel}`);
+    if (!STORY_FILE.test(rel)) continue;
+    const from = parseStory(rel, readRegular(abs, 'utf8')).status;
+    const to = parseStory(rel, update[rel]).status;
+    if (to !== from && STATUSES.indexOf(to) !== STATUSES.indexOf(from) + 1) {
+      throw new LedgerError(`${rel}: status ${from} -> ${to} is not allowed; status moves forward one step at a time`);
+    }
+  }
+  const pending = { ...create, ...update };
+  const all = { ...pending, ...project(dir, pending).derived };
+  return withTransaction(dir, txn => publishTransaction(dir, txn, all, create));
+}
+
+function describeError(error) { return `${error.code ? `${error.code}: ` : ''}${error.message}`; }
+
+function withOwnerLock(dir, waitMs, operation) {
+  const release = acquireLock(dir, waitMs);
+  let result, primaryError;
+  try { result = operation(); } catch (error) { primaryError = error; }
+  try { release(); } catch (releaseError) {
+    if (!primaryError) throw releaseError;
+    throw new LedgerError(`${describeError(primaryError)}; lock release failed: ${describeError(releaseError)}`, primaryError.exitCode || 1);
+  }
+  if (primaryError) throw primaryError;
+  return result;
+}
+
+function withTransaction(dir, operation) {
+  const txn = path.join(dir, '.txn');
+  fs.mkdirSync(txn, { mode: 0o700 });
+  try {
+    return operation(txn);
+  } catch (error) {
+    // Caller retains the live owner lock throughout restoration. A removed
+    // journal marks a committed batch, so recover then only cleans debris.
+    try { recover(dir); } catch (recoveryError) {
+      const state = fs.existsSync(path.join(dir, '.txn', 'journal.json')) ? 'recovery pending' : 'transaction cleanup pending';
+      throw new LedgerError(`${describeError(error)}; ${state}: ${describeError(recoveryError)}; ` +
+        'resolve the cause, then run recover to retry without overwriting foreign-owned files.', error.exitCode || 1);
+    }
+    throw error;
+  }
+}
+
 function main() {
   const opts = parseArgs(process.argv.slice(2));
   const cmd = opts._[0];
@@ -462,17 +503,14 @@ function main() {
     throw new LedgerError('--wait-ms must be an integer in 0..60000');
   }
   requireHardlinks(dir);
-  const release = acquireLock(dir, waitMs);
-  try {
+  return withOwnerLock(dir, waitMs, () => {
     const rolledBack = recover(dir);
     if (cmd === 'recover') return { ok: true, rolledBack };
     if (cmd === 'allocate') return allocate(root, dir, opts.epic, Number(opts.count || 1));
     if (cmd === 'reconcile') return apply(root, dir, {});
     if (cmd === 'apply') return apply(root, dir, JSON.parse(fs.readFileSync(opts.input, 'utf8')));
     throw new LedgerError(`unknown command: ${cmd}`);
-  } finally {
-    release();
-  }
+  });
 }
 
 if (require.main === module) {
