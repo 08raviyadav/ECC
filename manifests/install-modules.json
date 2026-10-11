@@ -757,7 +757,7 @@
     {
       "id": "ito-compute",
       "kind": "skills",
-      "description": "Authenticated Itô GPU inventory, RFQ, status, device revocation, and explicitly gated node-qualification workflows through the separately installed canonical CLI.",
+      "description": "Authenticated It\u00f4 GPU inventory, RFQ, status, device revocation, and explicitly gated node-qualification workflows through the separately installed canonical CLI.",
       "paths": [
         "skills/ito-compute",
         "skills/ito-inference",
@@ -1356,6 +1356,36 @@
       "defaultInstall": false,
       "cost": "heavy",
       "stability": "stable"
+    },
+    {
+      "id": "documentation-change-impact",
+      "kind": "skills",
+      "description": "Optional read-only change-impact analysis workflow.",
+      "paths": [
+        "skills/change-impact"
+      ],
+      "targets": [
+        "claude",
+        "claude-project",
+        "cursor",
+        "antigravity",
+        "codex",
+        "opencode",
+        "codebuddy",
+        "joycode",
+        "qwen",
+        "zed",
+        "hermes",
+        "openclaw",
+        "kimi",
+        "adal"
+      ],
+      "dependencies": [
+        "workflow-quality"
+      ],
+      "defaultInstall": false,
+      "cost": "light",
+      "stability": "beta"
     }
   ]
 }
