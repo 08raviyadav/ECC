@@ -117,19 +117,23 @@ For **code** targets the gate reads the change it is about to allow (Edit
   and clock reads on either side; in shell scripts also
   redirection to a file, `curl`, `wget`, `jq` and PowerShell file and web
   cmdlets. Without them the data
-  question is dropped.
+  question is dropped. With `GATEGUARD_EXTERNAL_CONTRACT_QUESTION` on, a
+  change that keeps the data question is also asked what outside the
+  repository decides its format or semantics.
 - **Trivial:** see [Comment and whitespace-only edits](#comment-and-whitespace-only-edits).
 
 Supported extensions: `.js .mjs .cjs .jsx .ts .tsx .mts .cts .py .pyi .go .rs
 .java .kt .kts .cs .c .h .cc .cpp .cxx .hpp .hh .hxx .sh .bash .zsh .ps1 .psm1
 .bat .cmd`. Any other extension, a
 missing or non-string field, more than 64 MultiEdit entries, a side over
-64 KiB, or 256 KiB in total means the full questions, word for word. Sensitive
+64 KiB, or 256 KiB in total means the full questions, word for word: the
+original four (importers, public API, data schemas, the user's instruction),
+or five with `GATEGUARD_EXTERNAL_CONTRACT_QUESTION` on. Sensitive
 and hard-linked targets and NotebookEdit calls always get the full questions. Other classes keep their class
 questions. Each question has a stable id (`importers`, `public-api`,
 `local-callers`, `callers`, `no-duplicate`, `data-schema`,
-`quote-instruction`, and one per class question), listed in
-`docs/gateguard/change-profile.md`.
+`external-contract` when opted in, `quote-instruction`, and one per class
+question), listed in `docs/gateguard/change-profile.md`.
 
 ### Questions by target class
 
@@ -583,10 +587,12 @@ load-bearing destructive-Bash checks keep running:
 | `GATEGUARD_BASH_EXTRA_DESTRUCTIVE` | unset | Extra destructive-command patterns, as regex source, added to the built-in set. A malformed regex is treated as unset (built-ins still apply) and logged once to stderr. |
 | `GATEGUARD_STATE_DIR` | `~/.gateguard` | Where per-session gate state is kept. If state cannot be persisted the gate allows the operation rather than looping, and names this variable in the warning. |
 | `GATEGUARD_METRICS` | unset (off) | Records one line per Edit/Write/MultiEdit/NotebookEdit/Bash/PowerShell decision in `<GATEGUARD_STATE_DIR>/metrics.jsonl` (see [Decision metrics](#decision-metrics)). Never changes a decision. |
+| `GATEGUARD_EXTERNAL_CONTRACT_QUESTION` | unset (off) | Adds a code question after the data-schema question: name what outside the repository decides the format, units, timezone or protocol semantics. Experimental: in hidden-intent trials it did not change outcomes (`docs/gateguard/question-effectiveness.md`). Never changes a decision. |
 
-`GATEGUARD_BASH_ROUTINE_DISABLED` and `GATEGUARD_METRICS` accept `1`, `true`,
-`on`, `enabled`, `enable`, or `yes` (case- and whitespace-insensitive); any
-other value leaves the routine gate on and metrics off.
+`GATEGUARD_BASH_ROUTINE_DISABLED`, `GATEGUARD_METRICS` and
+`GATEGUARD_EXTERNAL_CONTRACT_QUESTION` accept `1`, `true`, `on`, `enabled`,
+`enable`, or `yes` (case- and whitespace-insensitive); any other value leaves
+the routine gate on, metrics off, and the question unasked.
 
 #### Decision metrics
 

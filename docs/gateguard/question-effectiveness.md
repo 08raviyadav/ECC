@@ -529,6 +529,14 @@ and the corpus suggests that kind of answer matters. What is not claimed is
 that adding it improved anything measurable here. A fair test needs scenarios
 written by independent authors who have not seen that question or these results.
 
+Because nothing here shows it helps, the question is now opt-in: it is asked
+only with `GATEGUARD_EXTERNAL_CONTRACT_QUESTION` on (see
+[change-profile.md](change-profile.md#external-contract-question)). The
+harness clears every `GATEGUARD_*` variable from the agent's environment, so a
+`gate` arm built from a candidate tree that includes this change measures the
+gate without it, the "before the question" condition above. The runs reported
+here used candidate trees from before the change, where it was always asked.
+
 **Standing conclusion.** Across 336 billed trials the gate's benefit is not
 established, its direction has been positive in the unflagged runs, and its cost
 is a consistent 35 to 45% in turns and spend. "Not confirmed" is not "no

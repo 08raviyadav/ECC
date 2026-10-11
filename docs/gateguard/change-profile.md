@@ -116,6 +116,21 @@ or a PowerShell file or web cmdlet (`Out-File`, `Get-Content`,
 `*-Clixml`; `Import-Csv` matches `csv`). Redirection is found without
 reading quotes, so a `>` inside a string also counts.
 
+## External-contract question
+
+`GATEGUARD_EXTERNAL_CONTRACT_QUESTION` (`1`, `true`, `on`, `enabled`,
+`enable` or `yes`) adds `external-contract` right after every `data-schema`
+in the table above: "Name what outside this repository decides the format,
+units, timezone or protocol semantics here (the consumer, the producer, or a
+stated convention), or state that the choice is unconstrained". The condensed
+hint and the decision metrics name it too. It is off by default because it
+has no evidence behind it: it was designed after inspecting the
+hidden-intent corpus, and in the rerun that added it the gated arm did not
+improve (see
+[question-effectiveness.md](question-effectiveness.md#adding-an-external-contract-question-did-not-help)).
+`questionIdsFor(class, isWrite, profile, { externalContract: true })` returns
+the ids with it.
+
 ## Trivial edits
 
 An Edit is trivial when, for every entry, old and new have the same code once
@@ -293,7 +308,8 @@ questions were asked without storing text.
 | config | any | `config-reader`, `config-effect`, `no-plaintext-secrets`, `quote-instruction` |
 
 `[data-schema]` is asked only when `touchesData`. With an unknown profile the
-code text is byte-identical to the fixed four questions. Sensitive and
+code text is byte-identical to the fixed four questions, unless the opt-in
+[external-contract question](#external-contract-question) is on. Sensitive and
 hard-linked targets and NotebookEdit calls are never profiled, so they always
 get the full code questions. Instruction and
 config questions carry no change-dependent item, and the test and prose items
