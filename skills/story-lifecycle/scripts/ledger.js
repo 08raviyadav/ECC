@@ -288,10 +288,22 @@ function parseStory(rel, md) {
 function replaceTable(md, rel, header, rows) {
   const i = md.indexOf(DERIVED);
   if (i < 0) throw new LedgerError(`${rel}: missing derived-table marker`);
-  const start = md.indexOf('\n', i) + 1;
+  const newline = md.indexOf('\n', i);
+  const afterMarker = newline < 0 ? md.length : newline + 1;
+  const skipBlanks = (at) => at + (md.slice(at).match(/^(?:[ \t]*\r?\n)+/) || [''])[0].length;
+  const hasDerivedHeader = (at) => md.slice(at).split(/\r?\n/, 2).join('\n').replace(/[ \t]/g, '') === header.replace(/[ \t]/g, '');
+  const first = skipBlanks(afterMarker);
+  const start = md[first] === '|' ? first : afterMarker;
   let end = start;
-  while (md[end] === '|') { const nl = md.indexOf('\n', end); end = nl < 0 ? md.length : nl + 1; }
-  return md.slice(0, start) + [header, ...rows].join('\n') + '\n' + md.slice(end);
+  while (md[end] === '|') {
+    while (md[end] === '|') { const nl = md.indexOf('\n', end); end = nl < 0 ? md.length : nl + 1; }
+    // Older projections could insert a second table before a blank-separated
+    // original. Only adjacent copies of this derived header belong to us.
+    const next = skipBlanks(end);
+    if (!hasDerivedHeader(next)) break;
+    end = next;
+  }
+  return md.slice(0, start) + (newline < 0 ? '\n' : '') + [header, ...rows].join('\n') + '\n' + md.slice(end);
 }
 
 // Read the ledger with pending changes overlaid; return regenerated epic/sprint files that differ.
