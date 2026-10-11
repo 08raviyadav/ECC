@@ -15,8 +15,15 @@ function run(root, args, preload) {
 function ok(result) { assert.equal(result.status, 0, result.stderr); return JSON.parse(result.stdout); }
 function input(root, changes) { const file = path.join(root, 'input.json'); fs.writeFileSync(file, JSON.stringify(changes)); return file; }
 function snapshot(dir) {
-  return Object.fromEntries(fs.readdirSync(dir).sort().map(name => {
-    const file = path.join(dir, name);return [name, fs.lstatSync(file).isDirectory() ? snapshot(file) : fs.readFileSync(file).toString('base64')];
+  return Object.fromEntries(fs.readdirSync(dir, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name)).map(entry => {
+    const file = path.join(dir, entry.name);
+    if (entry.isDirectory()) return [entry.name, snapshot(file)];
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      assert.ok(fs.fstatSync(fd).isFile(), 'snapshot requires a regular file');
+      return [entry.name, fs.readFileSync(fd, 'base64')];
+    } finally { fs.closeSync(fd); }
   }));
 }
 function fixture(update = false) {
