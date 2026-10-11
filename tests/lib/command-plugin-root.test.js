@@ -115,7 +115,7 @@ for (const name of ['auto-update', 'instinct-status', 'skill-health', 'skill-hos
       try {
         const selected = { ...process.env, HOME: temp, USERPROFILE: temp, CLAUDE_CONFIG_DIR: root };
         delete selected.CLAUDE_PLUGIN_ROOT;
-        for (const env of [selected, { ...selected, CLAUDE_PLUGIN_ROOT: root }]) {
+        for (const env of [selected, { ...selected, CLAUDE_PLUGIN_ROOT: root }, { ...selected, CLAUDE_PLUGIN_ROOT: ' \t ' }, { ...selected, CLAUDE_PLUGIN_ROOT: ` ${root} ` }]) {
           const [bash] = resolveWindowsBashCandidates(['bash.exe', 'bash'], { env });
           const shell = process.platform === 'win32' ? bash : 'bash';
           assert.ok(shell, 'A native Git Bash executable is required');
