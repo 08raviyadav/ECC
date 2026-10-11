@@ -115,8 +115,8 @@ for (const name of ['auto-update', 'instinct-status', 'skill-health', 'skill-hos
         const selected = { ...process.env, HOME: temp, USERPROFILE: temp, CLAUDE_CONFIG_DIR: root };
         delete selected.CLAUDE_PLUGIN_ROOT;
         for (const env of [selected, { ...selected, CLAUDE_PLUGIN_ROOT: root }]) {
-          const result = spawnSync('bash', ['-c', 'source /dev/stdin; printf "%s" "$ECC_ROOT"'],
-            { input: assignment + '\n', env, cwd: temp, encoding: 'utf8' });
+          const result = spawnSync('bash', ['-s'],
+            { input: assignment + '\nprintf "%s" "$ECC_ROOT"\n', env, cwd: temp, encoding: 'utf8' });
           assert.strictEqual(result.status, 0, result.stderr);
           assert.strictEqual(result.stderr, '');
           assert.strictEqual(result.stdout, root);

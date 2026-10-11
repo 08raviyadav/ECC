@@ -43,14 +43,17 @@ function sameFile(file, expected) {
 }
 
 // Bind writes to an exclusively created descriptor, never a checked path.
-function writeNew(file, content) {
+function writeNew(file, content, { keepOpen = false } = {}) {
   const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT |
     fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+  let retained = false;
   try {
     fs.writeFileSync(fd, content);
     fs.fsyncSync(fd);
-    return identity(fs.fstatSync(fd));
-  } finally { fs.closeSync(fd); }
+    const owner = identity(fs.fstatSync(fd));
+    if (keepOpen) { owner.fd = fd; retained = true; }
+    return owner;
+  } finally { if (!retained) fs.closeSync(fd); }
 }
 
 function readSnapshot(file, encoding) {
@@ -113,14 +116,16 @@ function registryDir(root, dir) {
   }
 }
 
-function readLock(dir) {
-  let fd;
+function readLock(dir, { keepOpen = false } = {}) {
+  let fd, retained = false;
   try {
     fd = fs.openSync(path.join(dir, '.lock'), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     const stat = fs.fstatSync(fd);
     if (!stat.isFile()) return null;
-    return { ...JSON.parse(fs.readFileSync(fd, 'utf8')), owner: identity(stat) };
-  } catch { return null; } finally { if (fd !== undefined) fs.closeSync(fd); }
+    const holder = { ...JSON.parse(fs.readFileSync(fd, 'utf8')), owner: identity(stat) };
+    if (keepOpen) { holder.owner.fd = fd; retained = true; }
+    return holder;
+  } catch { return null; } finally { if (fd !== undefined && !retained) fs.closeSync(fd); }
 }
 
 function isStale(holder) { return holder.host === os.hostname() && !pidAlive(holder.pid); }
@@ -130,19 +135,22 @@ function isStale(holder) { return holder.host === os.hostname() && !pidAlive(hol
 // Returns false if another waiter (or a crashed one) holds .lock.break.
 function breakStaleLock(dir) {
   const brk = path.join(dir, '.lock.break');
-  let owner;
+  let owner, holder;
   try {
-    owner = writeNew(brk, String(process.pid));
+    owner = writeNew(brk, String(process.pid), { keepOpen: true });
   } catch (err) {
     if (err.code === 'EEXIST') return false;
     throw err;
   }
   try {
-    const holder = readLock(dir);
+    holder = readLock(dir, { keepOpen: true });
     if (holder && isStale(holder)) removeOwned(path.join(dir, '.lock'), holder.owner);
     return true;
   } finally {
-    removeOwned(brk, owner);
+    try { removeOwned(brk, owner); } finally {
+      fs.closeSync(owner.fd);
+      if (holder?.owner.fd !== undefined) fs.closeSync(holder.owner.fd);
+    }
   }
 }
 
@@ -151,8 +159,10 @@ function acquireLock(dir, waitMs) {
   const deadline = Date.now() + waitMs;
   for (;;) {
     try {
-      const owner = writeNew(lock, JSON.stringify({ pid: process.pid, host: os.hostname(), at: new Date().toISOString() }));
-      return () => removeOwned(lock, owner);
+      // A live descriptor keeps this inode allocated, even if a foreign writer
+      // replaces the pathname. dev/ino alone can alias after an early close.
+      const owner = writeNew(lock, JSON.stringify({ pid: process.pid, host: os.hostname(), at: new Date().toISOString() }), { keepOpen: true });
+      return () => { try { removeOwned(lock, owner); } finally { fs.closeSync(owner.fd); } };
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
     }

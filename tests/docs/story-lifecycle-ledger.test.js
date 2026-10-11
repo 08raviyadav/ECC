@@ -509,6 +509,34 @@ fs.rmSync = function (p, ...args) { const result = original.call(fs, p, ...args)
     assert.ok(fs.readFileSync(lock, 'utf8').includes('replacement'));
   }],
 
+  ['lock release survives inode reuse after an early descriptor close', () => {
+    const root = newRepo();
+    const { input } = createStories(root, ['Inode owner']);
+    const lock = path.join(root, '.stories', '.lock');
+    const preload = path.join(root, 'lock-inode-reuse.js');
+    fs.writeFileSync(preload, `const fs = require('fs'); let fd, oldStat, closed = false, replaced = false;
+const open = fs.openSync; fs.openSync = function (p, flags, ...a) {
+ const result = open.call(fs, p, flags, ...a);
+ if (String(p) === ${JSON.stringify(lock)} && (flags & fs.constants.O_EXCL)) {
+  fd = result; oldStat = fs.fstatSync(result); closed = false;
+ } return result; };
+const close = fs.closeSync; fs.closeSync = function (value) {
+ if (value === fd) closed = true; return close.call(fs, value); };
+const remove = fs.rmSync; fs.rmSync = function (p, ...a) {
+ const result = remove.call(fs, p, ...a);
+ if (!replaced && String(p).endsWith('/.stories/.txn')) {
+  replaced = true; fs.unlinkSync(${JSON.stringify(lock)});
+  fs.writeFileSync(${JSON.stringify(lock)}, JSON.stringify({ pid: ${process.pid}, host: require('os').hostname(), at: 'replacement' }), { flag: 'wx' });
+ } return result; };
+const stat = fs.lstatSync; fs.lstatSync = function (p, ...a) {
+ const result = stat.call(fs, p, ...a);
+ return replaced && closed && String(p) === ${JSON.stringify(lock)} ? oldStat : result;
+};`);
+    const result = spawnSync(process.execPath, ['-r', preload, LEDGER, 'apply', '--input', input, '--root', root], { encoding: 'utf8' });
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.ok(fs.readFileSync(lock, 'utf8').includes('replacement'));
+  }],
+
   ['recovery can itself be interrupted and retried without losing rollback ownership', () => {
     const root = newRepo();
     const { ids, input } = createStories(root, ['Before']);
