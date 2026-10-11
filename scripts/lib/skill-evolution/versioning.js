@@ -163,8 +163,15 @@ function createVersion(skillPath, options = {}) {
   ensureSkillVersioning(skillPath);
 
   const versions = listVersions(skillPath);
-  const nextVersion = versions.length === 0 ? 1 : versions[versions.length - 1].version + 1;
-  const snapshotPath = path.join(getVersionsDir(skillPath), `v${nextVersion}.md`);
+  let nextVersion = versions.length === 0 ? 1 : versions[versions.length - 1].version + 1;
+  let snapshotPath = path.join(getVersionsDir(skillPath), `v${nextVersion}.md`);
+  while (Number.isSafeInteger(nextVersion) && fs.existsSync(snapshotPath)) {
+    nextVersion += 1;
+    snapshotPath = path.join(getVersionsDir(skillPath), `v${nextVersion}.md`);
+  }
+  if (!Number.isSafeInteger(nextVersion)) {
+    throw new Error('Skill version exceeds the safe integer range');
+  }
   const skillContent = fs.readFileSync(skillFilePath, 'utf8');
   const createdAt = options.timestamp || new Date().toISOString();
 

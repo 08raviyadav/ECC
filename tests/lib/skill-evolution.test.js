@@ -221,8 +221,24 @@ function runTests() {
         );
         assert.strictEqual(versioning.getCurrentVersion(skillDir), 1);
         assert.ok(fs.statSync(snapshotDirectory).isDirectory());
+        for (const version of [2, 3]) {
+          fs.mkdirSync(path.join(versioning.getVersionsDir(skillDir), `v${version}.md`));
+        }
+        assert.strictEqual(versioning.createVersion(skillDir).version, 4);
+        assert.deepStrictEqual(versioning.listVersions(skillDir).map(entry => entry.version), [1, 4]);
+        for (const version of [2, 3]) {
+          assert.ok(fs.statSync(path.join(versioning.getVersionsDir(skillDir), `v${version}.md`)).isDirectory());
+        }
         assert.strictEqual(versioning.getCurrentVersion(path.join(fixtureRoot, 'missing-skill')), 0);
         assert.throws(() => versioning.createVersion(snapshotDirectory), /Skill file not found/);
+        const oversizedSnapshot = path.join(versioning.getVersionsDir(skillDir), 'v9007199254740992.md');
+        fs.writeFileSync(oversizedSnapshot, 'Preserve this snapshot');
+        const overflow = spawnSync(process.execPath, [
+          '-e', 'require("assert").throws(() => require(process.argv[1]).createVersion(process.argv[2]), /safe integer/)',
+          require.resolve('../../scripts/lib/skill-evolution/versioning'), skillDir,
+        ], { encoding: 'utf8', timeout: 10000 });
+        assert.strictEqual(overflow.status, 0, overflow.error?.message || overflow.stderr);
+        assert.strictEqual(fs.readFileSync(oversizedSnapshot, 'utf8'), 'Preserve this snapshot');
       } finally {
         cleanupTempDir(fixtureRoot);
       }
