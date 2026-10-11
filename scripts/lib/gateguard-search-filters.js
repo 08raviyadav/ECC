@@ -3,6 +3,8 @@
 // --- Search flags ---
 
 const POWERSHELL_SEARCHES = new Set(['get-childitem', 'gci', 'select-string', 'sls']);
+// Non-enumerable metadata preserves the existing string-array evidence shape.
+const RG_TYPE_FILTER_COUNT = Symbol('rg-type-filter-count');
 
 const VALUE_FLAGS = new Set([
   '-e', '-f', '-g', '-t', '-T', '-m', '-A', '-B', '-C',
@@ -203,15 +205,15 @@ function bracketClass(glob, open) {
   return { token: { type: 'class', negated, ranges }, end: i };
 }
 
-function classMatches(token, ch) {
+function classMatches(token, ch, caseSensitive) {
   if (ch === '/') return false;
-  const forms = [ch, ch.toLowerCase(), ch.toUpperCase()];
+  const forms = caseSensitive ? [ch] : [ch, ch.toLowerCase(), ch.toUpperCase()];
   const member = token.ranges.some(([lo, hi]) => forms.some(form => form >= lo && form <= hi));
   return member !== token.negated;
 }
 
 // see docs/gateguard/design-notes.md#glob-matching-without-regexp
-function wildcardMatch(glob, text) {
+function wildcardMatch(glob, text, caseSensitive) {
   const tokens = globTokens(glob);
   if (!tokens) return null;
   const n = text.length;
@@ -224,7 +226,7 @@ function wildcardMatch(glob, text) {
     for (let j = n; j >= 0; j--) {
       if (token.type === 'lit') row[j] = j < n && text[j] === token.ch && next[j + 1];
       else if (token.type === 'one') row[j] = j < n && text[j] !== '/' && next[j + 1];
-      else if (token.type === 'class') row[j] = j < n && classMatches(token, text[j]) && next[j + 1];
+      else if (token.type === 'class') row[j] = j < n && classMatches(token, text[j], caseSensitive) && next[j + 1];
       else if (token.type === 'star') row[j] = next[j] || (j < n && text[j] !== '/' && row[j + 1]);
       else if (token.type === 'deep') row[j] = next[j] || (j < n && row[j + 1]);
       else {
@@ -241,12 +243,12 @@ function normalizeFilterGlob(glob) {
   return String(glob).toLowerCase().replace(/\\/g, '/').replace(/^(?:\.\/)+/, '').replace(/^\/+/, '').replace(/\/+$/, '');
 }
 
-function globMatches(glob, text, malformed) {
+function globMatches(glob, text, malformed, caseSensitive = false) {
   if (glob.length > MAX_FILTER_GLOB_CHARS) return null;
   const alternatives = expandBraces(glob);
   if (!alternatives) return null;
   return alternatives.some(alternative => {
-    const matched = wildcardMatch(alternative, text);
+    const matched = wildcardMatch(alternative, text, caseSensitive);
     return matched === null ? malformed : matched;
   });
 }
@@ -273,8 +275,21 @@ function filtersAdmitTarget(item, ctx, stem) {
   const exclusions = Array.isArray(item.exclusions) ? item.exclusions : [];
   if (exclusions.length === 0) return true;
   if (exclusions.length > MAX_FILTERS_PER_SEARCH) return false;
+  const typeStart = exclusions.length - (exclusions[RG_TYPE_FILTER_COUNT] || 0);
   const segments = targetSegments(ctx);
-  return !exclusions.some(exclusion => exclusionCoversTarget(exclusion, segments, stem));
+  return !exclusions.some((exclusion, index) => index >= typeStart
+    ? typeGlobMatchesTarget(exclusion, ctx, true) !== false
+    : exclusionCoversTarget(exclusion, segments, stem));
+}
+
+function typeGlobMatchesTarget(glob, ctx, exclusion = false) {
+  const name = ctx.targetKey.split('/').pop() || '';
+  // Windows evidence keys have lost filename case. Refuse inclusion credit and
+  // conservatively check possible type exclusions, still only on the filename.
+  if (/^[a-z]:\/|^\/\//i.test(ctx.targetKey)) {
+    return exclusion ? globMatches(normalizeFilterGlob(glob), name.toLowerCase(), true) : null;
+  }
+  return globMatches(glob, name, false, true);
 }
 
 function scopeRelativeSegments(item, ctx) {
@@ -309,6 +324,7 @@ function includesAdmitTarget(item, ctx) {
   const includes = Array.isArray(item.includes) ? item.includes : [];
   if (includes.length === 0) return true;
   if (includes.length > MAX_FILTERS_PER_SEARCH) return false;
+  if (includes[RG_TYPE_FILTER_COUNT]) return includes.some(glob => typeGlobMatchesTarget(glob, ctx) === true);
   return includes.some(include => includeAdmitsTarget(include, item, ctx));
 }
 
@@ -397,9 +413,14 @@ function resolveTypeFilters({ typeIncludes = [], typeExclusions = [], ...filters
   const hasIncludes = filters.includes.length > 0;
   return {
     ...filters,
-    includes: hasIncludes ? filters.includes : typeIncludes,
-    exclusions: filters.exclusions.concat(hasIncludes ? [] : typeExclusions)
+    includes: hasIncludes ? filters.includes : markTypeFilters(typeIncludes, typeIncludes.length),
+    exclusions: markTypeFilters(filters.exclusions.concat(hasIncludes ? [] : typeExclusions), hasIncludes ? 0 : typeExclusions.length)
   };
+}
+
+function markTypeFilters(globs, count) {
+  if (!count) return globs;
+  return Object.freeze(Object.defineProperty(globs.slice(), RG_TYPE_FILTER_COUNT, { value: count }));
 }
 
 function shellSearchFilters(kind, args) {

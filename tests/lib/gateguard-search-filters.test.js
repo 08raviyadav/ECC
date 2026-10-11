@@ -105,6 +105,47 @@ test('rg -T/--type-not excludes the type globs', () => {
   }
 });
 
+test('rg type selection preserves case in literals and bracket classes', () => {
+  const cpp = rgItem(['-t', 'cpp', 'tokenizer', 'src']);
+  assert.strictEqual(admitted(cpp, 'src/tokenizer.c'), false);
+  assert.strictEqual(admitted(cpp, 'src/cpp.C'), true);
+  assert.strictEqual(admitted(cpp, 'src/tokenizer.h'), true);
+  assert.strictEqual(admitted(cpp, 'src/tokenizer.H'), true);
+  assert.strictEqual(admitted(cpp, 'src/tokenizer.CC'), false);
+  assert.strictEqual(admitted(rgItem(['-t', 'js']), 'src/tokenizer.JS'), false);
+  assert.strictEqual(admitted(rgItem(['-T', 'cpp']), 'src/tokenizer.c'), true);
+  assert.strictEqual(admitted(rgItem(['-T', 'cpp']), 'src/tokenizer.C'), false);
+  const grepCpp = { ...grepToolFilters(undefined, 'cpp'), scopes: [['.']], pathIncludes: true };
+  assert.strictEqual(admitted(grepCpp, 'src/tokenizer.c'), false);
+  assert.strictEqual(admitted(grepCpp, 'src/cpp.C'), true);
+});
+
+test('rg negative types match only the file basename; path globs still exclude ancestors', () => {
+  assert.strictEqual(admitted(rgItem(['-T', 'js']), 'src.js/tokenizer.py'), true);
+  assert.strictEqual(admitted(rgItem(['--type-not=cpp']), 'vendor.C/tokenizer.py'), true);
+  assert.strictEqual(admitted(rgItem(['-T', 'js']), 'src.py/tokenizer.js'), false);
+  assert.strictEqual(admitted(rgItem(['-T', 'js', '-g', '!vendor/**']), 'vendor/src.js/tokenizer.py'), false);
+  assert.strictEqual(admitted(rgItem(['-g', '!*.js']), 'src.js/tokenizer.py'), false);
+  assert.strictEqual(admitted(rgItem(['-T', 'js', '-g', '*.js']), 'src.js/tokenizer.js'), true);
+});
+
+test('case-folded Windows contexts cannot prove type coverage or bypass a possible exclusion', () => {
+  const ctx = file => ({ targetKey: `c:/proj/${file}`, resolveDir: () => 'c:/proj' });
+  assert.strictEqual(includesAdmitTarget(rgItem(['-t', 'js']), ctx('src/tokenizer.js')), false);
+  assert.strictEqual(filtersAdmitTarget(rgItem(['-T', 'cpp']), ctx('src/tokenizer.c'), null), false);
+  assert.strictEqual(filtersAdmitTarget(rgItem(['-T', 'js']), ctx('src.js/tokenizer.py'), null), true);
+});
+
+test('type filters keep the existing enumerable fields and string-array evidence shape', () => {
+  for (const item of [shellSearchFilters('rg', ['-t', 'cpp']), shellSearchFilters('rg', ['-T', 'cpp', '-g', '!vendor/**'])]) {
+    assert.deepStrictEqual(Object.keys(item).sort(), ['dropped', 'exclusions', 'includes', 'opaque']);
+    assert.ok(item.includes.every(glob => typeof glob === 'string'));
+    assert.ok(item.exclusions.every(glob => typeof glob === 'string'));
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(item.includes)), [...item.includes]);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(item.exclusions)), [...item.exclusions]);
+  }
+});
+
 test('explicit rg globs take precedence over type alternatives in either flag order', () => {
   for (const args of [['-t', 'js', '-g', '*.py'], ['-g', '*.py', '--type=js']]) {
     const item = rgItem([...args, 'tokenizer', 'src']);
