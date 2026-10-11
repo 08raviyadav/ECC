@@ -102,7 +102,10 @@ function readJsonl(filePath) {
     .filter(Boolean)
     .reduce((rows, line) => {
       try {
-        rows.push(JSON.parse(line));
+        const record = JSON.parse(line);
+        if (record && typeof record === 'object' && !Array.isArray(record)) {
+          rows.push(record);
+        }
       } catch {
         // Ignore malformed rows so analytics remain best-effort.
       }
