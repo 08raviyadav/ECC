@@ -215,13 +215,15 @@ test('CSV value validation accepts an optional header and rejects interior blank
     const csv = intentEval.loadIntentScenarios().find(scenario => scenario.id === 'csv-export-delimiter');
     const dest = path.join(workRoot, 'workspace');
     lib.prepareWorkspace(csv, dest);
+    fs.writeFileSync(path.join(dest, 'src/export.js'),
+      "exports.exportCsv = () => JSON.parse(require('fs').readFileSync(require('path').join(__dirname, 'csv-output.json'), 'utf8'));\n");
     for (const [output, expected] of [
       ['"Ada";"Paris"\r\n"Bo";"Rome"\r\n', 1],
       ['"name";"city"\r\n"Ada";"Paris"\r\n"Bo";"Rome"', 1],
       ['"Ada";"Paris"\r\n\r\n"Bo";"Rome"\r\n', 0],
       ['"Ada";"Paris"\r\n"Bo";"Rome"\r\n\r\n', 0]
     ]) {
-      fs.writeFileSync(path.join(dest, 'src/export.js'), `exports.exportCsv = () => ${JSON.stringify(output)};\n`);
+      fs.writeFileSync(path.join(dest, 'src/csv-output.json'), JSON.stringify(output));
       const score = lib.grade(csv, dest).score;
       if (expected === 1) assert.strictEqual(score, 1, JSON.stringify(output));
       else assert.ok(score < 1, JSON.stringify(output));
