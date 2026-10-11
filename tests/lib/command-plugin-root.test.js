@@ -160,6 +160,32 @@ for (const broken of [false, true]) {
     } finally { fs.rmSync(temp, { recursive: true, force: true }); }
   });
 }
+for (const level of ['slug', 'org']) {
+  test(`actual command skips non-directory cache children at ${level} level`, () => {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-stray-cache-'));
+    try {
+      const root = path.join(temp, 'plugins/cache/everything-claude-code/vendor/1.0.0');
+      fs.mkdirSync(path.join(root, 'scripts/lib'), { recursive: true });
+      fs.mkdirSync(path.join(root, ECC_SKILL_SENTINEL), { recursive: true });
+      fs.copyFileSync(path.join(__dirname, '../../scripts/lib/resolve-ecc-root.js'), path.join(root, 'scripts/lib/resolve-ecc-root.js'));
+      fs.writeFileSync(path.join(root, 'scripts/lib/utils.js'), '// fixture');
+      fs.writeFileSync(path.join(root, 'scripts/auto-update.js'), "console.log('UPDATER:'+__dirname)");
+      const cache = path.join(temp, 'plugins/cache/ecc');
+      const strayDir = level === 'slug' ? cache : path.join(cache, 'vendor');
+      fs.mkdirSync(strayDir, { recursive: true });
+      fs.writeFileSync(path.join(strayDir, 'stray.txt'), 'preserve');
+      const env = { ...process.env, HOME: temp, USERPROFILE: temp, CLAUDE_CONFIG_DIR: temp };
+      delete env.CLAUDE_PLUGIN_ROOT;
+      const [bash] = resolveWindowsBashCandidates(['bash.exe', 'bash'], { env });
+      const shell = process.platform === 'win32' ? bash : 'bash';
+      const assignment = fs.readFileSync(path.join(__dirname, '../../commands/auto-update.md'), 'utf8').split('\n').find(line => line.startsWith('ECC_ROOT='));
+      const result = spawnSync(shell, ['-s'], { input: assignment + '\nnode "$ECC_ROOT/scripts/auto-update.js"\n', env, cwd: temp, encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim(), `UPDATER:${fs.realpathSync(path.join(root, 'scripts'))}`);
+      assert.equal(fs.readFileSync(path.join(strayDir, 'stray.txt'), 'utf8'), 'preserve');
+    } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+  });
+}
 console.log(`Passed: ${passed}`);
 console.log(`Failed: ${failed}`);
 

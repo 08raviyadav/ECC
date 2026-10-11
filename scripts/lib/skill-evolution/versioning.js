@@ -184,35 +184,108 @@ function allocateSnapshotVersion(skillPath) {
   return nextVersion;
 }
 
+function removeOwnedSnapshot(snapshot) {
+  let current;
+  try {
+    current = fs.lstatSync(snapshot.path);
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+  if (!current.isFile() || current.dev !== snapshot.identity.dev || current.ino !== snapshot.identity.ino) {
+    throw new Error('Snapshot path changed ownership; replacement was preserved');
+  }
+  fs.unlinkSync(snapshot.path);
+}
+
+function failSnapshotAttempt(snapshot, primaryError) {
+  try {
+    removeOwnedSnapshot(snapshot);
+  } catch (recoveryError) {
+    const error = new Error(`${primaryError.message}; snapshot cleanup failed: ${recoveryError.message}; recovery is pending`, { cause: primaryError });
+    error.primaryError = primaryError;
+    error.recoveryError = recoveryError;
+    throw error;
+  }
+  throw primaryError;
+}
+
+function removeOwnedStaging(staging, contentIdentity) {
+  const directory = fs.lstatSync(staging.path);
+  if (!directory.isDirectory() || directory.dev !== staging.identity.dev || directory.ino !== staging.identity.ino) {
+    throw new Error('Snapshot staging directory changed ownership; replacement was preserved');
+  }
+  let content;
+  try {
+    content = fs.lstatSync(staging.contentPath);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  if (content) {
+    if (!contentIdentity || !content.isFile() || content.dev !== contentIdentity.dev || content.ino !== contentIdentity.ino) {
+      throw new Error('Snapshot staging content ownership could not be verified; content was preserved');
+    }
+    fs.unlinkSync(staging.contentPath);
+  }
+  // Unexpected entries remain owned by their writers. Empty-directory removal is safe.
+  fs.rmdirSync(staging.path);
+}
+
 function publishVersion(skillPath, skillContent, options) {
   ensureSkillExists(skillPath);
   const nextVersion = allocateSnapshotVersion(skillPath);
   const versionsDir = getVersionsDir(skillPath);
   ensureSkillVersioning(skillPath);
+  const stagingDir = fs.mkdtempSync(path.join(versionsDir, '.snapshot-'));
+  const stagedPath = path.join(stagingDir, 'content.md');
+  const staging = { path: stagingDir, contentPath: stagedPath, identity: fs.lstatSync(stagingDir) };
   const snapshotPath = path.join(versionsDir, `v${nextVersion}.md`);
   const createdAt = options.timestamp || new Date().toISOString();
+  let snapshot;
+  let published = false;
+  try {
+    const descriptor = fs.openSync(stagedPath, 'wx');
+    try {
+      snapshot = { version: nextVersion, path: snapshotPath, created_at: createdAt, identity: fs.fstatSync(descriptor) };
+      fs.writeFileSync(descriptor, skillContent, 'utf8');
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    // Exclusive linking publishes fully written bytes without replacing occupied paths.
+    fs.linkSync(stagedPath, snapshotPath);
+    published = true;
+    removeOwnedStaging(staging, snapshot.identity);
+    return snapshot;
+  } catch (primaryError) {
+    try {
+      if (published) removeOwnedSnapshot(snapshot);
+      removeOwnedStaging(staging, snapshot?.identity);
+    } catch (recoveryError) {
+      const error = new Error(`${primaryError.message}; publication cleanup failed: ${recoveryError.message}; recovery is pending`, { cause: primaryError });
+      error.primaryError = primaryError;
+      error.recoveryError = recoveryError;
+      throw error;
+    }
+    throw primaryError;
+  }
+}
 
-  fs.writeFileSync(snapshotPath, skillContent, { encoding: 'utf8', flag: 'wx' });
+function recordSnapshot(skillPath, snapshot, options) {
   appendEvolutionRecord(skillPath, 'amendments', {
     event: 'snapshot',
-    version: nextVersion,
+    version: snapshot.version,
     reason: options.reason || null,
     author: options.author || null,
     status: 'applied',
-    created_at: createdAt,
+    created_at: snapshot.created_at,
   });
-
-  return {
-    version: nextVersion,
-    path: snapshotPath,
-    created_at: createdAt,
-  };
+  return { version: snapshot.version, path: snapshot.path, created_at: snapshot.created_at };
 }
 
 function createVersion(skillPath, options = {}) {
   const skillFilePath = ensureSkillExists(skillPath);
   const skillContent = fs.readFileSync(skillFilePath, 'utf8');
-  return publishVersion(skillPath, skillContent, options);
+  return recordSnapshot(skillPath, publishVersion(skillPath, skillContent, options), options);
 }
 
 function rollbackTo(skillPath, targetVersion, options = {}) {
@@ -228,17 +301,33 @@ function rollbackTo(skillPath, targetVersion, options = {}) {
     throw new Error(`Version not found: v${normalizedTargetVersion}`);
   }
 
+  const priorContent = fs.readFileSync(getSkillFilePath(skillPath));
   const currentVersion = getCurrentVersion(skillPath);
   const targetContent = fs.readFileSync(targetPath, 'utf8');
   // Publish the restored-content snapshot before replacing unsnapshotted live work.
   // Initialization and exclusive publication failures therefore leave SKILL.md intact.
-  const createdVersion = publishVersion(skillPath, targetContent, {
+  const snapshotOptions = {
     timestamp: options.timestamp,
     reason: options.reason || `rollback to v${normalizedTargetVersion}`,
     author: options.author || null,
-  });
-
-  fs.writeFileSync(getSkillFilePath(skillPath), targetContent, 'utf8');
+  };
+  const snapshot = publishVersion(skillPath, targetContent, snapshotOptions);
+  try {
+    fs.writeFileSync(getSkillFilePath(skillPath), targetContent, 'utf8');
+  } catch (primaryError) {
+    try {
+      if (!fs.readFileSync(getSkillFilePath(skillPath)).equals(priorContent)) {
+        throw new Error('Live skill changed during the failed write; target snapshot retained');
+      }
+    } catch (recoveryError) {
+      const error = new Error(`${primaryError.message}; ${recoveryError.message}; recovery is pending`, { cause: primaryError });
+      error.primaryError = primaryError;
+      error.recoveryError = recoveryError;
+      throw error;
+    }
+    failSnapshotAttempt(snapshot, primaryError);
+  }
+  const createdVersion = recordSnapshot(skillPath, snapshot, snapshotOptions);
 
   appendEvolutionRecord(skillPath, 'amendments', {
     event: 'rollback',
