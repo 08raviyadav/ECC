@@ -202,6 +202,32 @@ function runTests() {
       assert.strictEqual(amendments[1].version, 2);
     })) passed++; else failed++;
 
+    if (test('ignores directories named like version snapshots', () => {
+      const fixtureRoot = createTempDir('skill-version-directory-');
+      try {
+        const skillDir = createSkill(fixtureRoot, 'demo', '# Demo\n');
+        const snapshotDirectory = path.join(versioning.getVersionsDir(skillDir), 'v999.md');
+        fs.mkdirSync(snapshotDirectory, { recursive: true });
+        fs.writeFileSync(path.join(versioning.getVersionsDir(skillDir), 'notes.txt'), 'Not a snapshot');
+
+        assert.deepStrictEqual(versioning.listVersions(skillDir), []);
+        assert.strictEqual(versioning.getCurrentVersion(skillDir), 1);
+        const snapshot = versioning.createVersion(skillDir);
+        assert.strictEqual(snapshot.version, 1);
+        assert.deepStrictEqual(versioning.listVersions(skillDir).map(entry => entry.version), [1]);
+        assert.deepStrictEqual(
+          versioning.listVersions(path.join(skillDir, 'SKILL.md')).map(entry => entry.version),
+          [1]
+        );
+        assert.strictEqual(versioning.getCurrentVersion(skillDir), 1);
+        assert.ok(fs.statSync(snapshotDirectory).isDirectory());
+        assert.strictEqual(versioning.getCurrentVersion(path.join(fixtureRoot, 'missing-skill')), 0);
+        assert.throws(() => versioning.createVersion(snapshotDirectory), /Skill file not found/);
+      } finally {
+        cleanupTempDir(fixtureRoot);
+      }
+    })) passed++; else failed++;
+
     if (test('rolls back to a previous snapshot without losing history', () => {
       const skillDir = path.join(skillsRoot, 'alpha');
 
