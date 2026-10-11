@@ -13,6 +13,7 @@ skills:
   - agent-eval
   - agent-harness-construction
   - agent-payment-x402
+  - agent-runtime-gateway-smoke-test
   - agentic-engineering
   - agentic-os
   - ai-first-engineering
@@ -24,6 +25,7 @@ skills:
   - autonomous-loops
   - backend-patterns
   - benchmark
+  - bengali-nlp
   - blueprint
   - browser-qa
   - bun-runtime
@@ -33,6 +35,7 @@ skills:
   - claude-devfleet
   - click-path-audit
   - clickhouse-io
+  - brownfield-retrospective
   - codebase-onboarding
   - coding-standards
   - compose-multiplatform-patterns
@@ -61,6 +64,7 @@ skills:
   - dmux-workflows
   - docker-patterns
   - documentation-lookup
+  - docs-governance
   - e2e-testing
   - energy-procurement
   - enterprise-agent-ops
@@ -99,7 +103,9 @@ skills:
   - liquid-glass-design
   - logistics-exception-management
   - market-research
+  - mcp-dependency-review
   - mcp-server-patterns
+  - mybatis-patterns
   - motion-advanced
   - motion-foundations
   - motion-patterns
@@ -107,6 +113,7 @@ skills:
   - nextjs-turbopack
   - nutrient-document-processing
   - nuxt4-patterns
+  - osint-investigation
   - perl-patterns
   - perl-security
   - perl-testing
@@ -142,6 +149,7 @@ skills:
   - security-review
   - security-scan
   - skill-comply
+  - skill-host-compat
   - skill-stocktake
   - springboot-patterns
   - springboot-security
@@ -158,6 +166,7 @@ skills:
   - tdd-workflow
   - team-builder
   - token-budget-advisor
+  - token-card
   - unified-memory
   - verification-loop
   - video-editing
@@ -166,6 +175,7 @@ skills:
   - x-api
 commands:
   - aside
+  - astra-review
   - auto-update
   - build-fix
   - checkpoint
@@ -255,7 +265,9 @@ commands:
   - setup-pm
   - skill-create
   - skill-health
+  - skill-host-compat
   - test-coverage
+  - token-card
   - update-codemaps
   - update-docs
   - vue-review
