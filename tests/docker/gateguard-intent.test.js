@@ -177,6 +177,33 @@ test('every grader separates the start, the trap and a correct solution', () => 
   }
 });
 
+test('the CSV grader rejects the right dialect around the wrong values', () => {
+  const lib = require(path.join(DIR, 'lib'));
+  const workRoot = tempDir('gg-decoy-');
+  const csv = intentEval.loadIntentScenarios().find(scenario => scenario.id === 'csv-export-delimiter');
+  const decoys = fs.readdirSync(csv.root).filter(name => name.startsWith('decoy-')).sort();
+  assert.deepStrictEqual(decoys, ['decoy-constant', 'decoy-keys']);
+  for (const decoy of decoys) {
+    const dest = path.join(workRoot, decoy);
+    lib.prepareWorkspace(csv, dest, decoy);
+    assert.ok(lib.grade(csv, dest).score < 1, `${decoy} must not pass`);
+  }
+  const { scores, sound } = intentEval.graderIsSound(csv, workRoot);
+  assert.ok(sound, JSON.stringify(scores));
+  for (const decoy of decoys) assert.ok(scores[decoy] < 1, `graderIsSound grades ${decoy}: ${scores[decoy]}`);
+});
+
+test('a grader that passes one of its decoys is not sound', () => {
+  const workRoot = tempDir('gg-decoy-pass-');
+  const csv = intentEval.loadIntentScenarios().find(scenario => scenario.id === 'csv-export-delimiter');
+  const root = path.join(workRoot, 'scenario');
+  fs.cpSync(csv.root, root, { recursive: true });
+  fs.cpSync(path.join(root, 'reference'), path.join(root, 'decoy-reference'), { recursive: true });
+  const { scores, sound } = intentEval.graderIsSound({ ...csv, root }, workRoot);
+  assert.strictEqual(scores['decoy-reference'], 1);
+  assert.strictEqual(sound, false);
+});
+
 // --- behaviour is classified into the right hole ---
 
 test('classify maps each behaviour to its hole', () => {
@@ -515,50 +542,74 @@ test('session cleanup preserves concurrent and pre-existing folders under custom
   }
 });
 
-test('actual runner freezes arm-patch source and refuses changed-input resume before dispatch', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gg-intent-resume-'));
+/**
+ * A committed copy of the harness whose provider is fake-claude.js, so the actual
+ * runner can be driven end to end. `fakeEnv` reaches the fake provider only.
+ */
+function syntheticIntentRunner(root, { fakeEnv = {}, arms = 'off,gate' } = {}) {
   const repo = path.join(root, 'repo');
   const copied = path.join(repo, 'docker', 'gateguard-effectiveness');
   const out = path.join(root, 'out');
   const preload = path.join(root, 'preload.js');
   const calls = path.join(root, 'calls.log');
   const config = path.join(root, 'claude-config');
+  fs.mkdirSync(repo);
+  fs.cpSync(path.join(ROOT, 'scripts'), path.join(repo, 'scripts'), { recursive: true });
+  fs.cpSync(DIR, copied, { recursive: true });
+  fs.mkdirSync(path.join(repo, 'docker', 'context-profiles'), { recursive: true });
+  fs.copyFileSync(path.join(ROOT, 'docker', 'context-profiles', 'ai-eval-lib.js'), path.join(repo, 'docker', 'context-profiles', 'ai-eval-lib.js'));
+  fs.copyFileSync(path.join(ROOT, 'package.json'), path.join(repo, 'package.json'));
+  const env = { ...process.env, HOME: path.join(root, 'home'), USERPROFILE: path.join(root, 'home'), CLAUDE_CONFIG_DIR: config, CLAUDE_CODE_PROJECT_DIR_NAME: '',
+    NODE_PATH: path.join(ROOT, 'node_modules'), GIT_CONFIG_GLOBAL: path.join(root, 'unused-gitconfig'),
+    GIT_AUTHOR_NAME: 'Synthetic Eval', GIT_COMMITTER_NAME: 'Synthetic Eval', GIT_AUTHOR_EMAIL: 'eval@example.invalid', GIT_COMMITTER_EMAIL: 'eval@example.invalid' };
+  for (const args of [['init', '-q'], ['add', '.'], ['commit', '-q', '--no-gpg-sign', '-m', 'synthetic source snapshot']]) {
+    const result = spawnSync('git', args, { cwd: repo, env, encoding: 'utf8', timeout: 30000 });
+    assert.strictEqual(result.status, 0, result.stderr);
+  }
+  const scenario = intentEval.loadIntentScenarios()[0];
+  const copiedReference = path.join(copied, 'scenarios-intent', scenario.id, 'reference');
+  fs.writeFileSync(preload, `
+    const cp = require('child_process');
+    const fs = require('fs');
+    const path = require('path');
+    const spawn = cp.spawnSync;
+    cp.spawnSync = (file, args, options) => {
+      if (file !== 'ecc-intent-fake') return spawn(file, args, options);
+      fs.appendFileSync(${JSON.stringify(calls)}, (args.includes('--settings') ? 'agent' : 'judge') + '\\n');
+      if (!args.includes('--settings')) return spawn(process.execPath, ['-e', 'console.log(JSON.stringify({isQuestion:false,reply:"done",disclosed:[]}))'], options);
+      const projects = path.join(options.env.CLAUDE_CONFIG_DIR, 'projects');
+      const own = path.resolve(options.cwd).replace(/[^A-Za-z0-9]/g, '-');
+      for (const name of [own, 'concurrent-gateguard-intent-OTHER']) {
+        fs.mkdirSync(path.join(projects, name), { recursive: true });
+        fs.writeFileSync(path.join(projects, name, 'sentinel'), name);
+      }
+      const fakeEnv = { ...options.env, ...${JSON.stringify(fakeEnv)}, FAKE_CLAUDE_OVERLAY: ${JSON.stringify(copiedReference)} };
+      return spawn(process.execPath, [${JSON.stringify(path.join(copied, 'fake-claude.js'))}, ...args], { ...options, env: fakeEnv });
+    };
+  `);
+  const args = ['--require', preload, path.join(copied, 'run-intent.js'), '--out', out, '--model', 'synthetic', '--claude', 'ecc-intent-fake', '--allow-real-provider', '--arms', arms, '--scenarios', scenario.id, '--reps', '1'];
+  const run = () => spawnSync(process.execPath, args, { cwd: repo, env, encoding: 'utf8', timeout: 60000 });
+  return { copied, out, calls, config, scenario, run };
+}
+
+test('actual runner stops before recording a gated trial whose hook never ran', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gg-intent-hookless-'));
   try {
-    fs.mkdirSync(repo);
-    fs.cpSync(path.join(ROOT, 'scripts'), path.join(repo, 'scripts'), { recursive: true });
-    fs.cpSync(DIR, copied, { recursive: true });
-    fs.mkdirSync(path.join(repo, 'docker', 'context-profiles'), { recursive: true });
-    fs.copyFileSync(path.join(ROOT, 'docker', 'context-profiles', 'ai-eval-lib.js'), path.join(repo, 'docker', 'context-profiles', 'ai-eval-lib.js'));
-    fs.copyFileSync(path.join(ROOT, 'package.json'), path.join(repo, 'package.json'));
-    const env = { ...process.env, HOME: path.join(root, 'home'), USERPROFILE: path.join(root, 'home'), CLAUDE_CONFIG_DIR: config, CLAUDE_CODE_PROJECT_DIR_NAME: '',
-      NODE_PATH: path.join(ROOT, 'node_modules'), GIT_CONFIG_GLOBAL: path.join(root, 'unused-gitconfig'),
-      GIT_AUTHOR_NAME: 'Synthetic Eval', GIT_COMMITTER_NAME: 'Synthetic Eval', GIT_AUTHOR_EMAIL: 'eval@example.invalid', GIT_COMMITTER_EMAIL: 'eval@example.invalid' };
-    for (const args of [['init', '-q'], ['add', '.'], ['commit', '-q', '--no-gpg-sign', '-m', 'synthetic source snapshot']]) {
-      const result = spawnSync('git', args, { cwd: repo, env, encoding: 'utf8', timeout: 30000 });
-      assert.strictEqual(result.status, 0, result.stderr);
-    }
-    const scenario = intentEval.loadIntentScenarios()[0];
-    const copiedReference = path.join(copied, 'scenarios-intent', scenario.id, 'reference');
-    fs.writeFileSync(preload, `
-      const cp = require('child_process');
-      const fs = require('fs');
-      const path = require('path');
-      const spawn = cp.spawnSync;
-      cp.spawnSync = (file, args, options) => {
-        if (file !== 'ecc-intent-fake') return spawn(file, args, options);
-        fs.appendFileSync(${JSON.stringify(calls)}, (args.includes('--settings') ? 'agent' : 'judge') + '\\n');
-        if (!args.includes('--settings')) return spawn(process.execPath, ['-e', 'console.log(JSON.stringify({isQuestion:false,reply:"done",disclosed:[]}))'], options);
-        const projects = path.join(options.env.CLAUDE_CONFIG_DIR, 'projects');
-        const own = path.resolve(options.cwd).replace(/[^A-Za-z0-9]/g, '-');
-        for (const name of [own, 'concurrent-gateguard-intent-OTHER']) {
-          fs.mkdirSync(path.join(projects, name), { recursive: true });
-          fs.writeFileSync(path.join(projects, name, 'sentinel'), name);
-        }
-        return spawn(process.execPath, [${JSON.stringify(path.join(copied, 'fake-claude.js'))}, ...args], { ...options, env: { ...options.env, FAKE_CLAUDE_OVERLAY: ${JSON.stringify(copiedReference)} } });
-      };
-    `);
-    const args = ['--require', preload, path.join(copied, 'run-intent.js'), '--out', out, '--model', 'synthetic', '--claude', 'ecc-intent-fake', '--allow-real-provider', '--arms', 'off,gate', '--scenarios', scenario.id, '--reps', '1'];
-    const run = () => spawnSync(process.execPath, args, { cwd: repo, env, encoding: 'utf8', timeout: 60000 });
+    // The runner needs a comparator arm; the ungated off trial is valid either way.
+    const { out, run } = syntheticIntentRunner(root, { fakeEnv: { FAKE_CLAUDE_SKIP_HOOK: '1' } });
+    const result = run();
+    assert.notStrictEqual(result.status, 0, 'a hookless gated trial must stop the run');
+    assert.match(result.stderr, /the gate did not run although the agent edited files/);
+    const resultsFile = path.join(out, 'results.jsonl');
+    const recorded = fs.existsSync(resultsFile) ? fs.readFileSync(resultsFile, 'utf8').trim().split('\n').filter(Boolean) : [];
+    assert.deepStrictEqual(recorded.map(line => JSON.parse(line).arm).filter(arm => arm === 'gate'), [], 'the hookless trial is not recorded as data');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('actual runner freezes arm-patch source and refuses changed-input resume before dispatch', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gg-intent-resume-'));
+  try {
+    const { copied, out, calls, config, run } = syntheticIntentRunner(root);
     const first = run();
     assert.strictEqual(first.status, 0, first.stderr);
     const meta = JSON.parse(fs.readFileSync(path.join(out, 'meta.json'), 'utf8'));

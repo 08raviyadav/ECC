@@ -317,7 +317,83 @@ if (gnuTarDir) {
   });
 }
 
+test('pilot summaries count valid trials only and report provider errors apart', () => {
+  const row = (arm, rep, passed, extra = {}) => ({
+    key: `s/${arm}/${rep}`, arm, scenario: 's', rep, question: 'q', passed, score: passed ? 1 : 0, evidenceRecall: 0, gateDenials: 0,
+    inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, costUsd: null, turns: 1, wallMs: 1, providerError: false, timedOut: false, ...extra
+  });
+  const rows = [
+    row('gate', 1, true),
+    row('gate', 2, false, { providerError: true }),
+    row('gate', 2, true),
+    row('gate', 3, false, { timedOut: true }),
+    row('off', 1, true)
+  ];
+  const gate = lib.summarize(rows, ['gate', 'off']).arms.find(arm => arm.arm === 'gate');
+  assert.strictEqual(gate.trials, 2, 'a provider error or timeout is not a trial');
+  assert.strictEqual(gate.passes, 2);
+  assert.strictEqual(gate.meanScore, 1);
+  assert.strictEqual(gate.providerErrors, 2);
+  assert.deepStrictEqual([...lib.completedTrialKeys(rows)].sort(), ['s/gate/1', 's/gate/2', 's/off/1']);
+});
+
+/** The pilot runner driven end to end with fake-claude.js as the provider. */
+function syntheticPilotRunner(root, scenario, arms) {
+  const out = path.join(root, 'out');
+  const preload = path.join(root, 'preload.js');
+  fs.writeFileSync(preload, `
+    const cp = require('child_process');
+    const originalSpawn = cp.spawnSync;
+    cp.spawnSync = (file, args, options) => file === 'ecc-fake-claude'
+      ? originalSpawn(process.execPath, [${JSON.stringify(path.join(DIR, 'fake-claude.js'))}, ...args], options)
+      : originalSpawn(file, args, options);
+  `);
+  const args = ['--require', preload, path.join(DIR, 'run.js'), '--out', out, '--model', 'fake', '--claude', 'ecc-fake-claude', '--allow-real-provider', '--arms', arms, '--reps', '1', '--scenarios', scenario.id];
+  const env = { ...process.env, FAKE_CLAUDE_OVERLAY: path.join(scenario.root, 'reference') };
+  const run = extraEnv => spawnSync(process.execPath, args, { env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 60000 });
+  const results = () => {
+    const file = path.join(out, 'results.jsonl');
+    return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
+  };
+  return { out, run, results };
+}
+
 if (gitAvailable()) {
+  test('a pilot trial that ended in a provider error is retried on resume', () => {
+    const root = tempDir('gg-eff-retry-');
+    try {
+      const scenario = scenarios.find(item => item.id === 'importers-date-shape');
+      const { out, run, results } = syntheticPilotRunner(root, scenario, 'off');
+      const failed = run({ FAKE_CLAUDE_PROVIDER_ERROR: '1' });
+      assert.strictEqual(failed.status, 0, failed.stderr);
+      assert.deepStrictEqual(results().map(row => row.providerError), [true]);
+      const retried = run({});
+      assert.strictEqual(retried.status, 0, retried.stderr);
+      assert.ok(retried.stderr.includes('1 trials to run'), retried.stderr);
+      const rows = results();
+      assert.deepStrictEqual(rows.map(row => row.providerError), [true, false], 'the failed attempt stays for audit');
+      assert.strictEqual(rows[1].passed, true);
+      assert.notStrictEqual(rows[0].transcript, rows[1].transcript, 'each attempt keeps its own transcript');
+      const { summary } = JSON.parse(fs.readFileSync(path.join(out, 'summary.json'), 'utf8'));
+      const off = summary.arms.find(arm => arm.arm === 'off');
+      assert.deepStrictEqual([off.trials, off.passes, off.providerErrors], [1, 1, 1]);
+      const again = run({});
+      assert.ok(again.stderr.includes('0 trials to run'), again.stderr);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('the pilot runner stops before recording a gated trial whose hook never ran', () => {
+    const root = tempDir('gg-eff-hookless-');
+    try {
+      const scenario = scenarios.find(item => item.id === 'importers-date-shape');
+      const { run, results } = syntheticPilotRunner(root, scenario, 'gate');
+      const result = run({ FAKE_CLAUDE_SKIP_HOOK: '1' });
+      assert.notStrictEqual(result.status, 0, 'a hookless gated trial must stop the run');
+      assert.match(result.stderr, /the gate did not run although the agent edited files/);
+      assert.deepStrictEqual(results(), [], 'the hookless trial is not recorded as data');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   test('actual fake-provider CLI resumes identity and resists a metadata publication symlink race', () => {
     const root = tempDir('gg-eff-cli-');
     const out = path.join(root, 'out');
