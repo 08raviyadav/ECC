@@ -19,6 +19,7 @@ For production use, pair with an LLM judge for semantic understanding.
 """
 
 import argparse
+import errno
 import re
 import sys
 from dataclasses import dataclass, field
@@ -368,7 +369,9 @@ def _read_file_or_text(path: Optional[str], *, required: bool = False) -> Option
     try:
         with open(path) as f:
             return f.read()
-    except FileNotFoundError:
+    except OSError as error:
+        if error.errno not in (errno.ENOENT, errno.ENAMETOOLONG):
+            raise
         if required:
             print(f"Error: output file '{path}' not found", file=sys.stderr)
             sys.exit(1)
@@ -382,7 +385,10 @@ def _read_input(args: argparse.Namespace) -> tuple[Optional[str], str]:
         print("Paste agent output (Ctrl+D to finish):")
         return task, sys.stdin.read()
     if args.output:
-        return _read_file_or_text(args.task), _read_file_or_text(args.output, required=True) or ""
+        task = _read_file_or_text(args.task)
+        if task is None and not sys.stdin.isatty():
+            task = sys.stdin.read()
+        return task, _read_file_or_text(args.output, required=True) or ""
     return _read_file_or_text(args.task), sys.stdin.read()
 
 
