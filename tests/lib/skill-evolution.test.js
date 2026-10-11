@@ -580,6 +580,36 @@ function runTests() {
       );
     })) passed++; else failed++;
 
+    if (test('zero warning threshold distinguishes unchanged rates from actual trends', () => {
+      const recent = '2026-03-14T10:00:00.000Z';
+      const older = '2026-02-24T10:00:00.000Z';
+      const records = [
+        { skill_id: 'unchanged', outcome: 'success', recorded_at: recent },
+        { skill_id: 'improving', outcome: 'failure', recorded_at: older },
+        { skill_id: 'improving', outcome: 'success', recorded_at: recent },
+        { skill_id: 'declining', outcome: 'success', recorded_at: older },
+        { skill_id: 'declining', outcome: 'failure', recorded_at: recent },
+      ];
+      const report = health.collectSkillHealth({
+        repoRoot,
+        homeDir,
+        now,
+        warnThreshold: 0,
+        stateStore: { listSkillExecutionRecords: () => records },
+      });
+
+      assert.strictEqual(report.warn_threshold, 0);
+      for (const [skillId, expectedTrend] of [
+        ['unchanged', 'stable'],
+        ['improving', 'improving'],
+        ['declining', 'worsening'],
+      ]) {
+        const skill = report.skills.find(entry => entry.skill_id === skillId);
+        assert.strictEqual(skill.failure_trend, expectedTrend);
+        assert.strictEqual(skill.declining, expectedTrend === 'worsening');
+      }
+    })) passed++; else failed++;
+
     if (test('does not report unmeasured skills as healthy (#2463)', () => {
       // A runs file that does not exist: skills are still discovered, so this
       // is exactly the "discovered but never executed" state.
