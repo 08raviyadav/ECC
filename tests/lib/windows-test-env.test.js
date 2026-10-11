@@ -12,7 +12,8 @@ const os = require('os');
 const path = require('path');
 
 const { test, banner, summary } = require('./helpers/mini-test-runner');
-const { withoutShadowingClaude, toRelativeTarPath } = require('./helpers/windows-test-env');
+const { spawnSync } = require('child_process');
+const { withoutShadowingClaude, toRelativeTarPath, resolvePython } = require('./helpers/windows-test-env');
 
 banner('windows-test-env helper');
 
@@ -54,6 +55,33 @@ try {
     assert.ok(!relative.includes(':'), `tar reads a colon as host:path: ${relative}`);
     assert.ok(!relative.includes('\\'), `expected forward slashes: ${relative}`);
     assert.strictEqual(path.resolve(cwd, relative), archive);
+  })) passed++; else failed++;
+
+  // A probe that runs only the commands listed, as Python 3.
+  const probeFor = working => (command, args) => working.includes([command, ...args.slice(0, args.indexOf('-c'))].join(' '));
+
+  if (test('skips a python3 that does not run Python, such as the Microsoft Store alias stub', () => {
+    assert.deepStrictEqual(resolvePython({ platform: 'win32', probe: probeFor(['py -3']) }), { command: 'py', prefix: ['-3'] });
+    assert.deepStrictEqual(resolvePython({ platform: 'win32', probe: probeFor(['python', 'py -3']) }), { command: 'python', prefix: [] });
+    assert.deepStrictEqual(resolvePython({ platform: 'win32', probe: probeFor(['python3']) }), { command: 'python3', prefix: [] });
+  })) passed++; else failed++;
+
+  if (test('prefers python3 off Windows', () => {
+    assert.deepStrictEqual(resolvePython({ platform: 'linux', probe: probeFor(['python3', 'python']) }), { command: 'python3', prefix: [] });
+    assert.deepStrictEqual(resolvePython({ platform: 'darwin', probe: probeFor(['python']) }), { command: 'python', prefix: [] });
+  })) passed++; else failed++;
+
+  if (test('returns null when no candidate runs Python 3', () => {
+    assert.strictEqual(resolvePython({ platform: 'win32', probe: () => false }), null);
+    assert.strictEqual(resolvePython({ platform: 'linux', probe: () => false }), null);
+  })) passed++; else failed++;
+
+  if (test('a resolved interpreter actually runs Python 3 here', () => {
+    const python = resolvePython();
+    if (!python) return;
+    const run = spawnSync(python.command, [...python.prefix, '-c', 'import sys; print(sys.version_info[0])'], { encoding: 'utf8' });
+    assert.strictEqual(run.status, 0, run.stderr);
+    assert.strictEqual(run.stdout.trim(), '3');
   })) passed++; else failed++;
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
