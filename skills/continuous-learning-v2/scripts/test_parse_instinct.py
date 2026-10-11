@@ -208,6 +208,23 @@ Prevents vulnerabilities.
     assert "Prevents vulnerabilities." in result[0]["content"]
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_parse_initial_utf8_bom(newline):
+    content = SAMPLE_INSTINCT_YAML.replace("\n", newline)
+    assert parse_instinct_file("\ufeff" + content) == parse_instinct_file(content)
+
+
+def test_parse_preserves_bom_inside_content():
+    content = SAMPLE_INSTINCT_YAML.replace("Always write", "Always \ufeffwrite")
+    assert "Always \ufeffwrite" in parse_instinct_file(content)[0]["content"]
+
+
+def test_load_instinct_file_with_utf8_bom(tmp_path):
+    (tmp_path / "bom.yaml").write_text(SAMPLE_INSTINCT_YAML, encoding="utf-8-sig")
+    instincts = _load_instincts_from_dir(tmp_path, "personal", "project")
+    assert [instinct["id"] for instinct in instincts] == ["test-instinct"]
+
+
 def test_empty_content_no_error():
     content = """\
 ---
