@@ -71,6 +71,52 @@ function removeOwned(file, owner) {
   if (sameFile(file, owner)) fs.unlinkSync(file);
 }
 
+// Probe the intended ledger volume, before creating directories, locks or journals.
+// Hardlinks preserve exclusive publication and rollback inode ownership; copying
+// is not an equivalent fallback. Status deliberately remains entirely read-only.
+function requireHardlinks(dir) {
+  let ancestor = dir;
+  for (;;) {
+    try {
+      if (!fs.statSync(ancestor).isDirectory()) throw new LedgerError(`not a directory: ${ancestor}`);
+      break;
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) throw err;
+      ancestor = parent;
+    }
+  }
+  let probe, probeOwner, source, target, owner, fd;
+  try {
+    probe = fs.mkdtempSync(path.join(ancestor, '.hardlink-probe-'));
+    probeOwner = identity(fs.lstatSync(probe));
+    source = path.join(probe, 'source');
+    target = path.join(probe, 'linked');
+    fd = fs.openSync(source, fs.constants.O_WRONLY | fs.constants.O_CREAT |
+      fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+    owner = identity(fs.fstatSync(fd));
+    fs.writeFileSync(fd, 'story-ledger hardlink capability probe');
+    fs.linkSync(source, target);
+    if (!sameFile(target, owner)) throw new LedgerError('hardlink probe did not preserve file identity');
+  } catch (err) {
+    throw new LedgerError(`hardlink-capable writable storage required at ${ancestor} (${err.code || err.message}); ` +
+      'no ledger write or recovery attempted. If storage changed with a pending transaction, use reviewed manual recovery.');
+  } finally {
+    try {
+      if (owner) { removeOwned(target, owner); removeOwned(source, owner); }
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+      // Never recursively delete a probe directory: unexpected files belong to
+      // somebody else and must survive, even when cleanup cannot finish.
+      if (probe && probeOwner) {
+        const stat = fs.lstatSync(probe);
+        if (stat.isDirectory() && stat.dev === probeOwner.dev && stat.ino === probeOwner.ino) fs.rmdirSync(probe);
+      }
+    }
+  }
+}
+
 function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; }
 }
@@ -388,13 +434,14 @@ function main() {
   const root = path.resolve(opts.root || '.');
   const dir = path.join(root, '.stories');
   assertNoSymlinkDirs(dir);
-  if (cmd === 'init') return init(dir);
+  if (cmd === 'init') { requireHardlinks(dir); return init(dir); }
   if (!fs.existsSync(path.join(dir, 'epics'))) throw new LedgerError('no .stories/ ledger; run `init` first');
   if (cmd === 'status') {
     const holder = readLock(dir);
     const transactionPending = fs.existsSync(path.join(dir, '.txn'));
     const recoveryPending = transactionPending && (!holder || isStale(holder));
-    if (transactionPending) return { stories: [], drift: [], recoveryPending, projectionAvailable: false };
+    if (transactionPending) return { stories: [], drift: [], recoveryPending, projectionAvailable: false,
+      recoveryAdvice: 'Recovery requires unchanged hardlink-capable storage; storage changes require reviewed manual recovery.' };
     const { stories, derived } = project(dir);
     return { stories, drift: Object.keys(derived), recoveryPending };
   }
@@ -402,6 +449,7 @@ function main() {
   if (!Number.isSafeInteger(waitMs) || waitMs < 0 || waitMs > 60000) {
     throw new LedgerError('--wait-ms must be an integer in 0..60000');
   }
+  requireHardlinks(dir);
   const release = acquireLock(dir, waitMs);
   try {
     const rolledBack = recover(dir);

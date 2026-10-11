@@ -79,6 +79,28 @@ function symlink(target, file, type) {
 const read = (root, rel) => fs.readFileSync(path.join(root, '.stories', rel), 'utf8');
 const storyFiles = (root) => fs.readdirSync(path.join(root, '.stories')).filter((f) => /-\d+\.md$/.test(f)).sort();
 
+function snapshot(dir) {
+  if (!fs.existsSync(dir)) return null;
+  return Object.fromEntries(fs.readdirSync(dir).sort().map((name) => {
+    const file = path.join(dir, name);
+    return [name, fs.lstatSync(file).isDirectory() ? snapshot(file) : fs.readFileSync(file, 'base64')];
+  }));
+}
+
+function withoutHardlinks(root, args, { expectedAncestor = null, code = 'ENOTSUP' } = {}) {
+  const preload = path.join(root, 'unsupported-links.js');
+  fs.writeFileSync(preload, `const fs = require('fs'); const path = require('path');
+fs.linkSync = function (source) {
+ const ancestor = ${JSON.stringify(expectedAncestor)};
+ if (ancestor && path.dirname(path.dirname(source)) !== ancestor) {
+  throw new Error('probe used wrong filesystem: ' + source);
+ }
+ throw Object.assign(new Error('injected unsupported hardlinks'), { code: ${JSON.stringify(code)} });
+};`);
+  const r = spawnSync(process.execPath, ['-r', preload, LEDGER, ...args], { encoding: 'utf8' });
+  return { code: r.status, out: r.stdout ? JSON.parse(r.stdout) : null, err: r.stderr };
+}
+
 // One full create-stories run (allocate + apply) in a separate process.
 const WRITER = `
 const { execFileSync } = require('child_process');
@@ -93,6 +115,55 @@ run('apply', '--input', root + '/' + tag + '.json');
 `;
 
 const tests = [
+  ['unsupported storage refuses init on the nearest existing ancestor without creating the ledger', () => {
+    const root = tempDir('story-storage-');
+    const intended = path.join(root, 'missing', 'repo');
+    const result = withoutHardlinks(root, ['init', '--root', intended], { expectedAncestor: root });
+    assert.strictEqual(result.code, 2, result.err);
+    assert.match(result.err, /hardlink.*ENOTSUP/);
+    assert.deepStrictEqual(fs.readdirSync(root), ['unsupported-links.js']);
+    assert.ok(!fs.existsSync(path.join(root, 'missing')));
+  }],
+
+  ['unsupported storage refuses every write before touching ledger files or ID reservations', () => {
+    const root = newRepo();
+    const { input } = createStories(root, ['Unpublished']);
+    fs.writeFileSync(path.join(root, '.stories', '.hardlink-probe-user'), 'keep user file');
+    const ledgerBefore = snapshot(path.join(root, '.stories'));
+    const idsBefore = snapshot(path.join(root, '.git', 'story-lifecycle'));
+    for (const args of [['init'], ['allocate', '--epic', 'auth-flow'],
+      ['apply', '--input', input], ['reconcile'], ['recover']]) {
+      const result = withoutHardlinks(root, [...args, '--root', root], {
+        expectedAncestor: path.join(root, '.stories'), code: 'EPERM',
+      });
+      assert.strictEqual(result.code, 2, `${args}: ${result.err}`);
+      assert.match(result.err, /hardlink.*EPERM/);
+      assert.deepStrictEqual(snapshot(path.join(root, '.stories')), ledgerBefore);
+      assert.deepStrictEqual(snapshot(path.join(root, '.git', 'story-lifecycle')), idsBefore);
+    }
+  }],
+
+  ['storage change leaves pending recovery untouched and status truthful until supported recovery', () => {
+    const root = newRepo();
+    const { ids, input } = createStories(root, ['Partially published']);
+    assert.strictEqual(run(root, ['apply', '--input', input], { STORY_LEDGER_CRASH_AFTER: '1' }).code, 70);
+    const before = snapshot(path.join(root, '.stories'));
+    const result = withoutHardlinks(root, ['recover', '--root', root]);
+    assert.strictEqual(result.code, 2, result.err);
+    assert.match(result.err, /hardlink.*ENOTSUP/);
+    assert.deepStrictEqual(snapshot(path.join(root, '.stories')), before, 'no partial rollback or lock cleanup');
+    const status = withoutHardlinks(root, ['status', '--root', root]);
+    assert.strictEqual(status.code, 0, status.err);
+    assert.strictEqual(status.out.recoveryPending, true);
+    assert.strictEqual(status.out.projectionAvailable, false);
+    assert.match(status.out.recoveryAdvice, /storage.*manual/i);
+    assert.deepStrictEqual(snapshot(path.join(root, '.stories')), before, 'status must be read-only');
+    assert.ok(fs.existsSync(path.join(root, '.stories', `${ids[0]}.md`)));
+    assert.strictEqual(run(root, ['recover']).code, 0);
+    assert.strictEqual(run(root, ['apply', '--input', input]).code, 0);
+    assert.deepStrictEqual(run(root, ['status']).out.drift, []);
+  }],
+
   ['create-stories writes story files and regenerates the epic table', () => {
     const root = newRepo();
     const { ids, input } = createStories(root, ['Login', 'Logout']);

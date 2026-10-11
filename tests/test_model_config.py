@@ -1,13 +1,16 @@
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from typing import Literal
 
 import pytest
 
 from llm.cli.selector import save_config
 from llm.core.interface import LLMProvider
-from llm.core.types import ProviderType
+from llm.core.types import LLMInput, Message, ProviderType, Role
 from llm.providers.astraflow import AstraflowCNProvider, AstraflowProvider
 from llm.providers.atlas import AtlasProvider
 from llm.providers.ollama import OllamaProvider
@@ -127,3 +130,60 @@ def test_unset_constructor_model_uses_selected_model(
     monkeypatch.setenv("LLM_MODEL", "Selected-Case-Model")
     provider = get_provider("openai", api_key="test-key", default_model=default_model)
     assert provider.get_default_model() == "Selected-Case-Model"
+
+
+@pytest.mark.parametrize("quote", ('"', "'"))
+@pytest.mark.parametrize("source", ("saved", "environment"))
+def test_padded_quoted_selection_is_normalized(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, quote: str, source: str,
+) -> None:
+    provider_value = f" {quote}  OLLAMA  {quote} "
+    model_value = f" {quote}  Selected/MixedCase-model  {quote} "
+    if source == "saved":
+        tmp_path.joinpath(".llm.env").write_text(
+            f"LLM_PROVIDER={provider_value}\nLLM_MODEL={model_value}\n"
+        )
+    else:
+        monkeypatch.setenv("LLM_PROVIDER", provider_value)
+        monkeypatch.setenv("LLM_MODEL", model_value)
+
+    assert get_provider().get_default_model() == "Selected/MixedCase-model"
+
+
+def test_saved_quoted_blank_model_retains_builtin_default(tmp_path: Path) -> None:
+    tmp_path.joinpath(".llm.env").write_text('LLM_PROVIDER=ollama\nLLM_MODEL="  \t  "\n')
+    assert get_provider().get_default_model() == "llama3.2"
+
+
+@pytest.mark.parametrize("quote", ('"', "'"))
+def test_saved_padded_model_reaches_real_http_request(tmp_path: Path, quote: str) -> None:
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            requests.append((self.path, json.loads(self.rfile.read(int(self.headers["Content-Length"])))))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"message":{"content":"ok"},"model":"Selected/MixedCase-model"}')
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    tmp_path.joinpath(".llm.env").write_text(
+        f"LLM_PROVIDER=ollama\nLLM_MODEL={quote}  Selected/MixedCase-model  {quote}\n"
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        provider = get_provider(base_url=f"http://127.0.0.1:{server.server_port}")
+        response = provider.generate(LLMInput(messages=[Message(Role.USER, "hello")]))
+        assert response.content == "ok"
+        assert requests[0][0] == "/api/chat"
+        assert requests[0][1]["model"] == "Selected/MixedCase-model"
+        provider.generate(LLMInput(messages=[], model="explicit-request-model"))
+        assert requests[1][1]["model"] == "explicit-request-model"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()

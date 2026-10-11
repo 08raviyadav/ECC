@@ -39,7 +39,7 @@ LLM_ENV_FILE = ".llm.env"
 def _strip_env_value(value: str) -> str:
     value = value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        return value[1:-1]
+        return value[1:-1].strip()
     return value
 
 

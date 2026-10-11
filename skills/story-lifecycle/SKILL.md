@@ -98,6 +98,22 @@ files directly with editor or shell tools: direct writes bypass the lock, ID all
 and rollback. The helper is plain Node.js with no dependencies and runs on Windows, macOS,
 and Linux. If `node` is not available, use the ledger read-only and tell the user.
 
+**Storage requirement:** `.stories/` and its subdirectories must stay on the same
+writable, hardlink-capable filesystem. FAT32 and exFAT do not support hardlinks.
+Before any write command, the helper probes `.stories/`, or its nearest existing
+ancestor before initialization, and cleans up only its own probe files. If the
+probe fails, initialization, ID allocation, locking, publication and recovery are
+refused before ledger mutation. There is no copy fallback: it would weaken
+exclusive ownership and crash recovery. A successful probe cannot guarantee that
+storage remains available or unchanged during a later write.
+
+`status` stays read-only, including on unsupported storage. An existing interrupted
+transaction still reports `recoveryPending` and suppresses projection; this is
+pending work, not a promise that automatic recovery can run on the current storage.
+If storage changed while `.txn/` was pending, preserve the journal and files and
+use reviewed manual recovery. Do not discard the transaction or retry writes on
+unsupported storage. Automatic rollback requires unchanged hardlink-capable storage.
+
 | Command | Effect |
 | --- | --- |
 | `init` | Create `.stories/`, `epics/`, `sprints/` and `.stories/.gitignore` |
@@ -126,7 +142,7 @@ Guarantees the helper enforces:
   batch. If a process dies mid-batch, the next write command (or `recover`) restores every
   backed-up file and deletes every file the batch created. Until then, `status` reports
   `recoveryPending: true`, and the next write command restores a consistent ledger
-  before it does anything else.
+  before it does anything else, after its storage capability check succeeds.
 - **Stale locks.** A lock whose process is dead (same host) is removed only under a
   second exclusive lock, `.stories/.lock.break`, after a re-read, so a live lock is never
   deleted. If a process dies while holding `.lock.break`, writers time out with code `3`;
