@@ -184,13 +184,12 @@ function allocateSnapshotVersion(skillPath) {
   return nextVersion;
 }
 
-function createVersion(skillPath, options = {}) {
-  const skillFilePath = ensureSkillExists(skillPath);
+function publishVersion(skillPath, skillContent, options) {
+  ensureSkillExists(skillPath);
   const nextVersion = allocateSnapshotVersion(skillPath);
   const versionsDir = getVersionsDir(skillPath);
   ensureSkillVersioning(skillPath);
   const snapshotPath = path.join(versionsDir, `v${nextVersion}.md`);
-  const skillContent = fs.readFileSync(skillFilePath, 'utf8');
   const createdAt = options.timestamp || new Date().toISOString();
 
   fs.writeFileSync(snapshotPath, skillContent, { encoding: 'utf8', flag: 'wx' });
@@ -210,6 +209,12 @@ function createVersion(skillPath, options = {}) {
   };
 }
 
+function createVersion(skillPath, options = {}) {
+  const skillFilePath = ensureSkillExists(skillPath);
+  const skillContent = fs.readFileSync(skillFilePath, 'utf8');
+  return publishVersion(skillPath, skillContent, options);
+}
+
 function rollbackTo(skillPath, targetVersion, options = {}) {
   const normalizedTargetVersion = Number(targetVersion);
   if (!Number.isSafeInteger(normalizedTargetVersion) || normalizedTargetVersion <= 0) {
@@ -225,14 +230,15 @@ function rollbackTo(skillPath, targetVersion, options = {}) {
 
   const currentVersion = getCurrentVersion(skillPath);
   const targetContent = fs.readFileSync(targetPath, 'utf8');
-  allocateSnapshotVersion(skillPath);
-  fs.writeFileSync(getSkillFilePath(skillPath), targetContent, 'utf8');
-
-  const createdVersion = createVersion(skillPath, {
+  // Publish the restored-content snapshot before replacing unsnapshotted live work.
+  // Initialization and exclusive publication failures therefore leave SKILL.md intact.
+  const createdVersion = publishVersion(skillPath, targetContent, {
     timestamp: options.timestamp,
     reason: options.reason || `rollback to v${normalizedTargetVersion}`,
     author: options.author || null,
   });
+
+  fs.writeFileSync(getSkillFilePath(skillPath), targetContent, 'utf8');
 
   appendEvolutionRecord(skillPath, 'amendments', {
     event: 'rollback',

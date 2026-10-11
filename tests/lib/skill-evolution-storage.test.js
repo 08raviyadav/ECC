@@ -140,5 +140,63 @@ test('unsafe rollback targets preserve the live skill and excluded snapshots', f
   }
 });
 
+test('rollback initialization failure preserves unsnapshotted live bytes and the target', fixture => {
+  const { skillDir, versionsDir } = fixture;
+  fs.mkdirSync(versionsDir);
+  const target = path.join(versionsDir, 'v1.md');
+  fs.writeFileSync(target, '# Saved target\n');
+  fs.writeFileSync(versioning.getEvolutionDir(skillDir), 'owned blocker');
+  assert.throws(() => versioning.rollbackTo(skillDir, 1), error => Boolean(error.code));
+  assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), '# Original\n');
+  assert.equal(fs.readFileSync(target, 'utf8'), '# Saved target\n');
+  assert.deepEqual(fs.readdirSync(versionsDir), ['v1.md']);
+  assert.equal(fs.readFileSync(versioning.getEvolutionDir(skillDir), 'utf8'), 'owned blocker');
+});
+
+test('rollback exclusive publication failure preserves live bytes and permits a later retry', fixture => {
+  const { skillDir, versionsDir } = fixture;
+  versioning.createVersion(skillDir);
+  fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Unsnapshotted work\n');
+  const amendmentPath = versioning.getEvolutionLogPath(skillDir, 'amendments');
+  const priorLog = fs.readFileSync(amendmentPath, 'utf8');
+  const writeFileSync = fs.writeFileSync;
+  const injectedError = Object.assign(new Error('Injected snapshot publication failure'), { code: 'EIO' });
+  fs.writeFileSync = (file, ...args) => {
+    if (file === path.join(versionsDir, 'v2.md') && args[1]?.flag === 'wx') throw injectedError;
+    return writeFileSync(file, ...args);
+  };
+  try {
+    assert.throws(() => versioning.rollbackTo(skillDir, 1), error => error === injectedError);
+  } finally {
+    fs.writeFileSync = writeFileSync;
+  }
+  assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), '# Unsnapshotted work\n');
+  assert.equal(fs.readFileSync(path.join(versionsDir, 'v1.md'), 'utf8'), '# Original\n');
+  assert.deepEqual(fs.readdirSync(versionsDir), ['v1.md']);
+  assert.equal(fs.readFileSync(amendmentPath, 'utf8'), priorLog);
+  const restored = versioning.rollbackTo(skillDir, 1);
+  assert.equal(restored.version, 2);
+  assert.equal(fs.readFileSync(restored.path, 'utf8'), '# Original\n');
+  assert.equal(fs.readFileSync(restored.path, 'utf8'), fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'));
+  assert.equal(versioning.getEvolutionLog(skillDir, 'amendments').at(-1).event, 'rollback');
+});
+
+test('successful rollback snapshots restored content and retains earlier targets for another rollback', fixture => {
+  const { skillDir } = fixture;
+  versioning.createVersion(skillDir);
+  fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Second version\n');
+  versioning.createVersion(skillDir);
+  fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Unsnapshotted work\n');
+  const restored = versioning.rollbackTo(skillDir, 1);
+  assert.equal(restored.version, 3);
+  assert.equal(fs.readFileSync(restored.path, 'utf8'), '# Original\n');
+  assert.equal(fs.readFileSync(restored.path, 'utf8'), fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'));
+  const second = versioning.rollbackTo(skillDir, 2);
+  assert.equal(second.version, 4);
+  assert.equal(fs.readFileSync(second.path, 'utf8'), '# Second version\n');
+  assert.equal(fs.readFileSync(second.path, 'utf8'), fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'));
+  assert.equal(versioning.getCurrentVersion(skillDir), 4);
+});
+
 console.log(`Results: Passed: ${passed}, Failed: ${failed}`);
 process.exitCode = failed > 0 ? 1 : 0;
