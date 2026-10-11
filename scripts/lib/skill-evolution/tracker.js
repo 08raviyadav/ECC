@@ -53,6 +53,7 @@ function normalizeExecutionRecord(input, options = {}) {
   const outcome = input.outcome;
   const recordedAt = input.recorded_at || options.now || new Date().toISOString();
   const userFeedback = input.user_feedback || input.userFeedback || null;
+  const failureReason = input.failure_reason ?? input.failureReason ?? null;
 
   if (typeof skillId !== 'string' || skillId.trim().length === 0) {
     throw new Error('skill_id is required');
@@ -74,6 +75,10 @@ function normalizeExecutionRecord(input, options = {}) {
     throw new Error('user_feedback must be accepted, corrected, rejected, or null');
   }
 
+  if (failureReason !== null && typeof failureReason !== 'string') {
+    throw new Error('failure_reason must be a string or null');
+  }
+
   if (Number.isNaN(Date.parse(recordedAt))) {
     throw new Error('recorded_at must be an ISO timestamp');
   }
@@ -83,7 +88,7 @@ function normalizeExecutionRecord(input, options = {}) {
     skill_version: skillVersion,
     task_description: taskDescription,
     outcome,
-    failure_reason: input.failure_reason || input.failureReason || null,
+    failure_reason: failureReason || null,
     tokens_used: toNullableNumber(input.tokens_used ?? input.tokensUsed, 'tokens_used'),
     duration_ms: toNullableNumber(input.duration_ms ?? input.durationMs, 'duration_ms'),
     user_feedback: userFeedback,
