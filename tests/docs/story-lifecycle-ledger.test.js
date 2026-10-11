@@ -43,8 +43,15 @@ function writeJson(root, name, value) {
   return file;
 }
 
+const ownedTemps = new Set();
+function tempDir(prefix) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  ownedTemps.add(dir);
+  return dir;
+}
+
 function newRepo() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'story-ledger-'));
+  const root = tempDir('story-ledger-');
   execFileSync('git', ['init', '-q', root]);
   assert.strictEqual(run(root, ['init']).code, 0);
   const input = writeJson(root, 'epic.json', { create: { 'epics/auth-flow.md': EPIC } });
@@ -183,7 +190,7 @@ const tests = [
   ['git worktrees of one clone share ID allocation', () => {
     const root = newRepo();
     execFileSync('git', ['-C', root, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init']);
-    const wt = `${root}-wt`;
+    const wt = path.join(tempDir('story-worktree-'), 'checkout');
     execFileSync('git', ['-C', root, 'worktree', 'add', '-q', wt]);
     run(wt, ['init']);
     run(wt, ['apply', '--input', writeJson(wt, 'epic.json', { create: { 'epics/auth-flow.md': EPIC } })]);
@@ -195,7 +202,7 @@ const tests = [
   ['concurrent allocation from two worktrees never hands out the same ID', async () => {
     const root = newRepo();
     execFileSync('git', ['-C', root, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init']);
-    const wt = `${root}-wt`;
+    const wt = path.join(tempDir('story-worktree-'), 'checkout');
     execFileSync('git', ['-C', root, 'worktree', 'add', '-q', wt]);
     run(wt, ['init']);
     run(wt, ['apply', '--input', writeJson(wt, 'epic.json', { create: { 'epics/auth-flow.md': EPIC } })]);
@@ -208,7 +215,7 @@ const tests = [
 
   ['symlinked ledger directories are refused before any write', () => {
     const root = newRepo();
-    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'story-outside-'));
+    const outside = tempDir('story-outside-');
     fs.rmSync(path.join(root, '.stories', 'sprints'), { recursive: true });
     symlink(outside, path.join(root, '.stories', 'sprints'), 'dir');
     const input = writeJson(root, 's.json', { create: { 'sprints/sprint-1.md': '# Sprint 1\n' } });
@@ -290,7 +297,7 @@ const tests = [
   ['symlinked .ids registry is refused outside git', () => {
     const root = newRepo();
     fs.rmSync(path.join(root, '.git'), { recursive: true });
-    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'story-ids-'));
+    const outside = tempDir('story-ids-');
     symlink(outside, path.join(root, '.stories', '.ids'), 'dir');
     assert.strictEqual(run(root, ['allocate', '--epic', 'auth-flow']).code, 2);
     assert.deepStrictEqual(fs.readdirSync(outside), []);
@@ -311,9 +318,9 @@ const tests = [
     fs.writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 + 1, host: os.hostname(), at: 'stale' }));
     // Preload: right after the waiter reads the stale lock, another writer wins and holds a live lock.
     const preload = path.join(root, 'race.js');
-    fs.writeFileSync(preload, `const fs = require('fs'); const orig = fs.readFileSync; let raced = false;
-fs.readFileSync = function (p, ...a) { const r = orig.call(fs, p, ...a);
-  if (!raced && String(p).endsWith('.lock')) { raced = true; fs.unlinkSync(p);
+    fs.writeFileSync(preload, `const fs = require('fs'); const orig = fs.openSync; let raced = false;
+fs.openSync = function (p, ...a) { const r = orig.call(fs, p, ...a);
+  if (!raced && String(p).endsWith('.lock') && a[0] === fs.constants.O_NOFOLLOW) { raced = true; fs.unlinkSync(p);
     fs.writeFileSync(p, JSON.stringify({ pid: ${process.pid}, host: require('os').hostname(), at: 'live' }), { flag: 'wx' }); }
   return r; };`);
     const r = spawnSync(process.execPath, ['-r', preload, LEDGER, 'allocate', '--epic', 'auth-flow', '--root', root, '--wait-ms', '200'], { encoding: 'utf8' });
@@ -363,7 +370,7 @@ fs.readFileSync = function (p, ...a) { const r = orig.call(fs, p, ...a);
 
   ['git-common allocation registry refuses a symlinked parent', () => {
     const root = newRepo();
-    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'story-outside-'));
+    const outside = tempDir('story-outside-');
     symlink(outside, path.join(root, '.git', 'story-lifecycle'), 'dir');
     const result = run(root, ['allocate', '--epic', 'auth-flow']);
     assert.strictEqual(result.code, 2, result.err);
@@ -396,6 +403,131 @@ fs.readFileSync = function (p, ...a) { const r = orig.call(fs, p, ...a);
     }
   }],
 
+  ['init never follows a symlink planted at the ignore-file write boundary', () => {
+    const root = tempDir('story-init-race-');
+    const victim = path.join(root, 'victim.txt');
+    fs.writeFileSync(victim, 'ORIGINAL');
+    const preload = path.join(root, 'race.js');
+    fs.writeFileSync(preload, `const fs = require('fs'); let planted = false;
+const plant = (p) => { if (!planted && String(p).endsWith('/.stories/.gitignore')) {
+  planted = true; fs.symlinkSync(${JSON.stringify(victim)}, p); } };
+const exists = fs.existsSync; fs.existsSync = function (p) { const result = exists.call(fs, p);
+  if (!result) plant(p); return result; };
+const open = fs.openSync; fs.openSync = function (p, ...args) { plant(p); return open.call(fs, p, ...args); };`);
+    const result = spawnSync(process.execPath, ['-r', preload, LEDGER, 'init', '--root', root], { encoding: 'utf8' });
+    assert.strictEqual(fs.readFileSync(victim, 'utf8'), 'ORIGINAL', result.stderr);
+    assert.notStrictEqual(result.status, 0, 'a planted symlink must fail closed');
+  }],
+
+  ['interrupted story-before-new-sprint batch reports recovery without projecting partial state', () => {
+    for (const interrupted of [false, true]) {
+      const root = newRepo();
+      const [id] = run(root, ['allocate', '--epic', 'auth-flow']).out.ids;
+      const before = read(root, 'epics/auth-flow.md');
+      const input = writeJson(root, 'sprint-batch.json', { create: {
+        [`${id}.md`]: story(id, 'Assigned', { sprint: '1' }),
+        'sprints/sprint-1.md': '# Sprint 1\n\n<!-- Derived from story files -->\n| ID | Title | Points | Status |\n| --- | --- | --- | --- |\n\n## Total Points: 0\n',
+      } });
+      const result = run(root, ['apply', '--input', input], interrupted ? { STORY_LEDGER_CRASH_AFTER: '1' } : {});
+      assert.strictEqual(result.code, interrupted ? 70 : 0, result.err);
+      if (interrupted) {
+        const partialStory = read(root, `${id}.md`);
+        const status = run(root, ['status']);
+        assert.strictEqual(status.code, 0, status.err);
+        assert.strictEqual(status.out.recoveryPending, true);
+        assert.strictEqual(status.out.projectionAvailable, false);
+        assert.strictEqual(read(root, `${id}.md`), partialStory, 'status must be read-only');
+        assert.strictEqual(run(root, ['recover']).code, 0);
+        assert.deepStrictEqual(storyFiles(root), []);
+        assert.strictEqual(read(root, 'epics/auth-flow.md'), before);
+        assert.strictEqual(run(root, ['apply', '--input', input]).code, 0);
+      }
+      const status = run(root, ['status']);
+      assert.strictEqual(status.code, 0, status.err);
+      assert.strictEqual(status.out.recoveryPending, false);
+      assert.deepStrictEqual(status.out.drift, []);
+      assert.ok(read(root, 'sprints/sprint-1.md').includes(`| ${id} | Assigned | 3 | todo |`));
+    }
+  }],
+
+  ['a competing create at publication is preserved through failure and recovery', () => {
+    const root = newRepo();
+    const { ids, input } = createStories(root, ['Ours']);
+    const target = path.join(root, '.stories', `${ids[0]}.md`);
+    const preload = path.join(root, 'publish-race.js');
+    fs.writeFileSync(preload, `const fs = require('fs'); let planted = false;
+const plant = (target) => { if (!planted && target === ${JSON.stringify(target)}) {
+  planted = true; fs.writeFileSync(target, 'COMPETING OWNER', {flag:'wx'}); } };
+for (const name of ['renameSync', 'linkSync']) { const original = fs[name]; fs[name] = function (source, target, ...a) {
+  if (String(source).includes('/.txn/new-')) plant(target); return original.call(fs, source, target, ...a); }; }`);
+    const result = spawnSync(process.execPath, ['-r', preload, LEDGER, 'apply', '--input', input, '--root', root], { encoding: 'utf8' });
+    assert.notStrictEqual(result.status, 0, 'publication must not overwrite another owner');
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'COMPETING OWNER');
+    assert.strictEqual(run(root, ['recover']).code, 0);
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'COMPETING OWNER', 'rollback must not delete another owner');
+  }],
+
+  ['staged writes refuse symlinks planted just before open', () => {
+    const root = newRepo();
+    const { input } = createStories(root, ['Ours']);
+    const victim = path.join(root, 'victim.txt'); fs.writeFileSync(victim, 'ORIGINAL');
+    const preload = path.join(root, 'stage-race.js');
+    fs.writeFileSync(preload, `const fs = require('fs'); let planted = false;
+const plant = (p) => { if (!planted && String(p).endsWith('/.txn/new-0')) {
+ planted = true; fs.symlinkSync(${JSON.stringify(victim)}, p); } };
+const open = fs.openSync; fs.openSync = function (p, ...a) { plant(p); return open.call(fs, p, ...a); };
+const write = fs.writeFileSync; fs.writeFileSync = function (p, ...a) { plant(p); return write.call(fs, p, ...a); };`);
+    const result = spawnSync(process.execPath, ['-r', preload, LEDGER, 'apply', '--input', input, '--root', root], { encoding: 'utf8' });
+    assert.notStrictEqual(result.status, 0);
+    assert.strictEqual(fs.readFileSync(victim, 'utf8'), 'ORIGINAL');
+    assert.strictEqual(run(root, ['recover']).code, 0);
+    assert.deepStrictEqual(storyFiles(root), []);
+  }],
+
+  ['concurrent attempts to publish one allocated story have one owner', async () => {
+    const root = newRepo();
+    const { ids, input } = createStories(root, ['Single owner']);
+    const results = await Promise.all([runAsync(root, ['apply', '--input', input]), runAsync(root, ['apply', '--input', input])]);
+    assert.deepStrictEqual(results.map((r) => r.code).sort(), [0, 4]);
+    assert.deepStrictEqual(storyFiles(root), [`${ids[0]}.md`]);
+    assert.ok(read(root, `${ids[0]}.md`).includes('Single owner'));
+    assert.deepStrictEqual(run(root, ['status']).out.drift, []);
+  }],
+
+  ['release leaves a replacement lock owned by another writer intact', () => {
+    const root = newRepo();
+    const { input } = createStories(root, ['Ours']);
+    const lock = path.join(root, '.stories', '.lock');
+    const preload = path.join(root, 'lock-owner-race.js');
+    fs.writeFileSync(preload, `const fs = require('fs'); const original = fs.rmSync; let replaced = false;
+fs.rmSync = function (p, ...args) { const result = original.call(fs, p, ...args);
+ if (!replaced && String(p).endsWith('/.stories/.txn')) { replaced = true; fs.unlinkSync(${JSON.stringify(lock)});
+  fs.writeFileSync(${JSON.stringify(lock)}, JSON.stringify({pid:${process.pid},host:require('os').hostname(),at:'replacement'}), {flag:'wx'}); }
+ return result; };`);
+    const result = spawnSync(process.execPath, ['-r', preload, LEDGER, 'apply', '--input', input, '--root', root], { encoding: 'utf8' });
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.ok(fs.readFileSync(lock, 'utf8').includes('replacement'));
+  }],
+
+  ['recovery can itself be interrupted and retried without losing rollback ownership', () => {
+    const root = newRepo();
+    const { ids, input } = createStories(root, ['Before']);
+    assert.strictEqual(run(root, ['apply', '--input', input]).code, 0);
+    const before = read(root, `${ids[0]}.md`);
+    const change = writeJson(root, 'update.json', { update: { [`${ids[0]}.md`]: story(ids[0], 'After', { status: 'in-progress' }) } });
+    assert.strictEqual(run(root, ['apply', '--input', change], { STORY_LEDGER_CRASH_AFTER: '1' }).code, 70);
+    const preload = path.join(root, 'recover-crash.js');
+    fs.writeFileSync(preload, `const fs = require('fs'); const original = fs.renameSync;
+fs.renameSync = function (source, ...args) { const result = original.call(fs, source, ...args);
+ if (String(source).endsWith('/.txn/restore.tmp')) process.exit(70); return result; };`);
+    const recovery = spawnSync(process.execPath, ['-r', preload, LEDGER, 'recover', '--root', root], { encoding: 'utf8' });
+    assert.strictEqual(recovery.status, 70);
+    const retry = run(root, ['recover']);
+    assert.strictEqual(retry.code, 0, retry.err);
+    assert.strictEqual(read(root, `${ids[0]}.md`), before);
+    assert.deepStrictEqual(run(root, ['status']).out.drift, []);
+  }],
+
   ['ledger paths are confined to .stories/ file shapes', () => {
     const dir = path.join(os.tmpdir(), '.stories');
     for (const bad of ['../x-1.md', 'epics/../../x.md', 'Auth-1.md', 'a/b-1.md', 'epics/a.txt', 'sprints/sprint-0.md', '/abs-1.md']) {
@@ -422,6 +554,9 @@ fs.readFileSync = function (p, ...a) { const r = orig.call(fs, p, ...a);
       console.log(`  ✗ ${name}`);
       console.log(`    Error: ${error.message}`);
       failed++;
+    } finally {
+      for (const dir of ownedTemps) fs.rmSync(dir, { recursive: true, force: true });
+      ownedTemps.clear();
     }
   }
   console.log(`\nResults: Passed: ${passed}, Failed: ${failed}`);

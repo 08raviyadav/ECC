@@ -502,3 +502,21 @@ def test_ollama_malformed_capability_declaration_is_not_authority(monkeypatch, c
     provider.generate(request)
     assert ['tools' in chat for chat in server.chats] == [False, True]
     assert server.shows == ['custom', 'custom']
+
+
+def test_ollama_mixed_history_does_not_infer_tool_names_from_empty_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = _FakeOllama(monkeypatch, [_ollama_answer("ok")])
+    messages = [
+        Message(role=Role.ASSISTANT, content="", tool_calls=[ToolCall(id="", name="first", arguments={}), ToolCall(id="", name="last", arguments={}), ToolCall(id="real-id", name="identified", arguments={})]),
+        Message(role=Role.TOOL, content="unnamed missing"),
+        Message(role=Role.TOOL, content="unnamed empty", tool_call_id=""),
+        Message(role=Role.TOOL, content="explicit empty", tool_call_id="", name="explicit"),
+        Message(role=Role.TOOL, content="identified result", tool_call_id="real-id"),
+        Message(role=Role.TOOL, content="explicit override", tool_call_id="real-id", name="override"),
+    ]
+    OllamaProvider().generate(LLMInput(messages=messages))
+    results = server.chats[0]["messages"][1:]
+    assert "tool_name" not in results[0]
+    assert "tool_name" not in results[1]
+    assert [item["tool_name"] for item in results[2:]] == ["explicit", "identified", "override"]
+    assert results[3]["tool_call_id"] == "real-id"

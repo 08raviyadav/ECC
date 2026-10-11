@@ -33,6 +33,41 @@ function parseArgs(argv) {
 
 function sleep(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 
+function identity(stat) { return { dev: stat.dev, ino: stat.ino }; }
+
+function sameFile(file, expected) {
+  try {
+    const stat = fs.lstatSync(file);
+    return stat.isFile() && stat.dev === expected.dev && stat.ino === expected.ino;
+  } catch (err) { if (err.code === 'ENOENT') return false; throw err; }
+}
+
+// Bind writes to an exclusively created descriptor, never a checked path.
+function writeNew(file, content) {
+  const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT |
+    fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+  try {
+    fs.writeFileSync(fd, content);
+    fs.fsyncSync(fd);
+    return identity(fs.fstatSync(fd));
+  } finally { fs.closeSync(fd); }
+}
+
+function readSnapshot(file, encoding) {
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw new LedgerError(`not a regular file: ${file}`);
+    return { content: fs.readFileSync(fd, encoding), owner: identity(stat) };
+  } finally { fs.closeSync(fd); }
+}
+
+function readRegular(file, encoding) { return readSnapshot(file, encoding).content; }
+
+function removeOwned(file, owner) {
+  if (sameFile(file, owner)) fs.unlinkSync(file);
+}
+
 function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; }
 }
@@ -79,7 +114,13 @@ function registryDir(root, dir) {
 }
 
 function readLock(dir) {
-  try { return JSON.parse(fs.readFileSync(path.join(dir, '.lock'), 'utf8')); } catch { return null; }
+  let fd;
+  try {
+    fd = fs.openSync(path.join(dir, '.lock'), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) return null;
+    return { ...JSON.parse(fs.readFileSync(fd, 'utf8')), owner: identity(stat) };
+  } catch { return null; } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
 function isStale(holder) { return holder.host === os.hostname() && !pidAlive(holder.pid); }
@@ -89,18 +130,19 @@ function isStale(holder) { return holder.host === os.hostname() && !pidAlive(hol
 // Returns false if another waiter (or a crashed one) holds .lock.break.
 function breakStaleLock(dir) {
   const brk = path.join(dir, '.lock.break');
+  let owner;
   try {
-    fs.writeFileSync(brk, String(process.pid), { flag: 'wx' });
+    owner = writeNew(brk, String(process.pid));
   } catch (err) {
     if (err.code === 'EEXIST') return false;
     throw err;
   }
   try {
     const holder = readLock(dir);
-    if (holder && isStale(holder)) fs.rmSync(path.join(dir, '.lock'), { force: true });
+    if (holder && isStale(holder)) removeOwned(path.join(dir, '.lock'), holder.owner);
     return true;
   } finally {
-    fs.rmSync(brk, { force: true });
+    removeOwned(brk, owner);
   }
 }
 
@@ -109,8 +151,8 @@ function acquireLock(dir, waitMs) {
   const deadline = Date.now() + waitMs;
   for (;;) {
     try {
-      fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, host: os.hostname(), at: new Date().toISOString() }), { flag: 'wx' });
-      return () => fs.rmSync(lock, { force: true });
+      const owner = writeNew(lock, JSON.stringify({ pid: process.pid, host: os.hostname(), at: new Date().toISOString() }));
+      return () => removeOwned(lock, owner);
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
     }
@@ -130,7 +172,7 @@ function recover(dir) {
   const journalPath = path.join(txn, 'journal.json');
   let rolledBack = 0;
   if (fs.existsSync(journalPath)) {
-    const { entries } = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+    const { entries } = JSON.parse(readRegular(journalPath, 'utf8'));
     for (const entry of entries) {
       resolveLedgerPath(dir, entry.path);
       if (entry.backup && !(BACKUP.test(entry.backup) && fs.lstatSync(path.join(txn, entry.backup)).isFile())) {
@@ -140,13 +182,22 @@ function recover(dir) {
     for (const entry of entries) {
       const target = resolveLedgerPath(dir, entry.path);
       if (entry.backup) {
+        if (entry.original && !sameFile(target, entry.original) && !sameFile(target, entry.owner) &&
+            !(entry.backupOwner && sameFile(target, entry.backupOwner))) {
+          throw new LedgerError(`interrupted update changed ownership: ${entry.path}`);
+        }
         // Fresh temp file, then rename: neither step writes through a planted symlink.
         const tmp = path.join(txn, 'restore.tmp');
         fs.rmSync(tmp, { force: true });
-        fs.copyFileSync(path.join(txn, entry.backup), tmp, fs.constants.COPYFILE_EXCL);
+        // Preserve the backup inode so a crash during recovery is retryable.
+        readRegular(path.join(txn, entry.backup)); // no-follow, regular-file validation
+        fs.linkSync(path.join(txn, entry.backup), tmp);
         fs.renameSync(tmp, target);
       } else {
-        fs.rmSync(target, { force: true });
+        // A failed exclusive publication may leave a competing owner's file.
+        // Only delete the inode staged by this transaction, never that file.
+        if (entry.owner) removeOwned(target, entry.owner);
+        else if (fs.existsSync(target)) throw new LedgerError(`cannot prove interrupted create ownership: ${entry.path}`);
       }
       rolledBack++;
     }
@@ -185,7 +236,7 @@ function replaceTable(md, rel, header, rows) {
 
 // Read the ledger with pending changes overlaid; return regenerated epic/sprint files that differ.
 function project(dir, pending = {}) {
-  const read = (rel) => (rel in pending ? pending[rel] : fs.readFileSync(resolveLedgerPath(dir, rel), 'utf8'));
+  const read = (rel) => (rel in pending ? pending[rel] : readRegular(resolveLedgerPath(dir, rel), 'utf8'));
   const list = (sub, re) => {
     const abs = path.join(dir, sub);
     const onDisk = fs.existsSync(abs) ? fs.readdirSync(abs).map((f) => (sub ? `${sub}/${f}` : f)) : [];
@@ -220,7 +271,10 @@ function project(dir, pending = {}) {
 function init(dir) {
   for (const sub of ['epics', 'sprints']) fs.mkdirSync(path.join(dir, sub), { recursive: true });
   const ignore = path.join(dir, '.gitignore');
-  if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, '.lock\n.lock.break\n.txn/\n.ids/\n');
+  try { writeNew(ignore, '.lock\n.lock.break\n.txn/\n.ids/\n'); } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+    if (!fs.lstatSync(ignore).isFile()) throw new LedgerError('refusing non-regular ledger ignore file');
+  }
   return { ok: true, dir };
 }
 
@@ -242,7 +296,7 @@ function allocate(root, dir, epic, count) {
     if (!Number.isSafeInteger(n)) throw new LedgerError('story ID exceeds safe integer range');
     const id = `${epic}-${n}`;
     try {
-      fs.writeFileSync(path.join(reg, id), '', { flag: 'wx' });
+      writeNew(path.join(reg, id), '');
       ids.push(id);
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
@@ -273,7 +327,7 @@ function apply(root, dir, changes) {
     const abs = resolveLedgerPath(dir, rel);
     if (!fs.existsSync(abs)) throw new LedgerError(`cannot update missing ${rel}`);
     if (!STORY_FILE.test(rel)) continue;
-    const from = parseStory(rel, fs.readFileSync(abs, 'utf8')).status;
+    const from = parseStory(rel, readRegular(abs, 'utf8')).status;
     const to = parseStory(rel, update[rel]).status;
     if (to !== from && STATUSES.indexOf(to) !== STATUSES.indexOf(from) + 1) {
       throw new LedgerError(`${rel}: status ${from} -> ${to} is not allowed; status moves forward one step at a time`);
@@ -282,19 +336,32 @@ function apply(root, dir, changes) {
   const pending = { ...create, ...update };
   const all = { ...pending, ...project(dir, pending).derived };
   const txn = path.join(dir, '.txn');
-  fs.mkdirSync(txn);
+  fs.mkdirSync(txn, { mode: 0o700 });
   const entries = Object.keys(all).map((rel, i) => {
     const existed = fs.existsSync(resolveLedgerPath(dir, rel));
-    if (existed) fs.copyFileSync(resolveLedgerPath(dir, rel), path.join(txn, `backup-${i}`));
-    fs.writeFileSync(path.join(txn, `new-${i}`), all[rel]);
-    return { path: rel, backup: existed ? `backup-${i}` : null, staged: `new-${i}` };
+    if (rel in create && existed) throw new LedgerError(`refusing to overwrite existing ${rel}`, 4);
+    const previous = existed ? readSnapshot(resolveLedgerPath(dir, rel)) : null;
+    const backupOwner = previous ? writeNew(path.join(txn, `backup-${i}`), previous.content) : null;
+    const owner = writeNew(path.join(txn, `new-${i}`), all[rel]);
+    return { path: rel, backup: existed ? `backup-${i}` : null, staged: `new-${i}`,
+      owner, original: previous ? previous.owner : null, backupOwner };
   });
-  fs.writeFileSync(path.join(txn, 'journal.tmp'), JSON.stringify({ entries }));
+  writeNew(path.join(txn, 'journal.tmp'), JSON.stringify({ entries }));
   fs.renameSync(path.join(txn, 'journal.tmp'), path.join(txn, 'journal.json'));
   const crashAfter = Number(process.env.STORY_LEDGER_CRASH_AFTER || -1);
   entries.forEach((entry, i) => {
     if (i === crashAfter) process.exit(70); // test-only fault injection
-    fs.renameSync(path.join(txn, entry.staged), resolveLedgerPath(dir, entry.path));
+    const staged = path.join(txn, entry.staged);
+    const target = resolveLedgerPath(dir, entry.path);
+    if (entry.backup) {
+      if (!sameFile(target, entry.original)) throw new LedgerError(`update changed ownership: ${entry.path}`, 4);
+      fs.renameSync(staged, target);
+    } else {
+      // link publishes the staged inode exclusively; rename would clobber a
+      // file created after validation by an independent owner.
+      fs.linkSync(staged, target);
+      fs.unlinkSync(staged);
+    }
   });
   fs.rmSync(path.join(txn, 'journal.json')); // commit point
   fs.rmSync(txn, { recursive: true, force: true });
@@ -310,9 +377,11 @@ function main() {
   if (cmd === 'init') return init(dir);
   if (!fs.existsSync(path.join(dir, 'epics'))) throw new LedgerError('no .stories/ ledger; run `init` first');
   if (cmd === 'status') {
-    const { stories, derived } = project(dir);
     const holder = readLock(dir);
-    const recoveryPending = fs.existsSync(path.join(dir, '.txn')) && (!holder || isStale(holder));
+    const transactionPending = fs.existsSync(path.join(dir, '.txn'));
+    const recoveryPending = transactionPending && (!holder || isStale(holder));
+    if (transactionPending) return { stories: [], drift: [], recoveryPending, projectionAvailable: false };
+    const { stories, derived } = project(dir);
     return { stories, drift: Object.keys(derived), recoveryPending };
   }
   const waitMs = Number(opts['wait-ms'] ?? 5000);
