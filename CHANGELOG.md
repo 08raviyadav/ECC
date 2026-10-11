@@ -23,6 +23,8 @@
 - GateGuard keys checked files by canonical path, resolving relative targets against the tool `cwd`, so `a.py`, `./a.py`, and the absolute path (or differently cased and separated Windows spellings) share one first touch. Keys from earlier state files are still honoured.
 - GateGuard gates a MultiEdit call as its `tool_input.file_path` when its entries do not name their own path, which is the tool's own shape; such calls were never gated before, including on sensitive files.
 - GateGuard gates NotebookEdit as a first-touch edit of its `notebook_path`; notebooks were never gated before.
+- GateGuard prior-search credit no longer counts a search that never saw the target. File-type filters (`rg -t`/`-T`/`--type`/`--type-not`, `fd -e`/`--extension`, the Grep tool's `type`), the Glob tool's pattern, shell glob operands, and git pathspecs now filter like include globs, so `rg -t py tokenizer src` or `Glob **/tokenizer.py` no longer credits `tokenizer.js`. A search confined to the target's own file name (`Glob **/tokenizer.js`, `find -name tokenizer.js`, Grep `glob: 'tokenizer.js'`) is a lookup and never credits it. PowerShell searches keep backslashes as path separators.
+- GateGuard no longer passes an edit as comment-only when its text contains U+2028, U+2029, or U+0085, which end a JavaScript or C# line comment.
 
 ## 2.2.3 - 2026-10-01
 

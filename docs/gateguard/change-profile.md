@@ -139,6 +139,9 @@ Anything the lexer cannot read with confidence makes the entry non-trivial:
 - a line comment ending in `\` (it continues onto the next line in C and
   Make), the trigraph `??/`, a `/*` inside a block comment, and an
   unterminated block comment or string;
+- U+2028, U+2029 or U+0085 anywhere in the text: JavaScript ends a line at
+  the first two and C# at all three, so code after one inside a `//` comment
+  runs, while the lexer splits lines only at `\n` and `\r`;
 - a code line ending in a line continuation `\` (trailing blanks included):
   a C macro, a Python explicit continuation or a string continued onto the
   next line joins that line, so adding or removing a comment-only line after
