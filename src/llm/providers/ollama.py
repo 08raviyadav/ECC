@@ -42,9 +42,10 @@ def _messages_payload(messages: list[Message]) -> list[dict[str, Any]]:
     for msg in messages:
         item = msg.to_dict()
         for tc in msg.tool_calls or []:
-            names[tc.id] = tc.name
+            if tc.id:
+                names[tc.id] = tc.name
         if msg.role == Role.TOOL:
-            tool_name = msg.name or names.get(msg.tool_call_id or "")
+            tool_name = msg.name or (names.get(msg.tool_call_id) if msg.tool_call_id else None)
             if tool_name:
                 item["tool_name"] = tool_name
         payload.append(item)
