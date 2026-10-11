@@ -15,9 +15,10 @@ let failed = 0;
 function snapshot(root) {
   if (!fs.existsSync(root)) return {};
   return Object.fromEntries(fs.readdirSync(root, { recursive: true, withFileTypes: true })
-    .filter(entry => entry.isFile())
     .map(entry => { const file = path.join(entry.parentPath || entry.path, entry.name);
-      return [path.relative(root, file), require('crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex')]; }).sort());
+      const value = entry.isDirectory() ? '[directory]' : entry.isSymbolicLink()
+        ? `[symlink:${fs.readlinkSync(file)}]` : require('crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+      return [path.relative(root, file), value]; }).sort());
 }
 function test(name, fn, target = 'claude-project') {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-command-runtime-')));
@@ -50,9 +51,11 @@ function test(name, fn, target = 'claude-project') {
     ok(result); return result.stdout.trim();
   };
   const noPayload = () => {
-    for (const file of ['settings.json', '.mcp.json', 'hooks/hooks.json', 'scripts/hooks']) {
+    for (const file of ['.mcp.json', 'hooks/hooks.json', 'scripts/hooks']) {
       assert.ok(!fs.existsSync(path.join(root, file)), `Unexpected ${file}`);
     }
+    const settings = path.join(root, 'settings.json');
+    if (fs.existsSync(settings)) assert.ok(!JSON.parse(fs.readFileSync(settings, 'utf8')).hooks);
     assert.ok(!state().operations.some(op => ['hooks-runtime', 'mcp-configs'].includes(op.moduleId)));
   };
   try { fn({ dir, home, project, root, scripts, marker, write, install, uninstall, plan,
@@ -154,4 +157,40 @@ test('publication rechecks nested helper package conflict', f => {
   } }), /module boundary/);
   assert.ok(!fs.existsSync(f.marker));
 });
+test('uninstall retains owned boundary for newly added user JS until it is removed', f => {
+  f.write(path.join(f.project, 'package.json'), '{"type":"module"}\n');
+  f.ok(f.install()); const file = path.join(f.scripts, 'user.js'); f.write(file, 'module.exports = 47;\n');
+  const partial = JSON.parse(f.uninstall().stdout);
+  assert.strictEqual(partial.results[0].status, 'partial');
+  assert.strictEqual(partial.summary.errorCount, 0);
+  assert.ok(partial.results[0].retainedPaths.includes(f.marker));
+  assert.ok(fs.existsSync(f.marker)); assert.strictEqual(f.probe(file), '47');
+  fs.unlinkSync(file); f.ok(f.uninstall()); assert.ok(!fs.existsSync(f.marker)); assert.ok(!fs.existsSync(f.statePath));
+});
+for (const scope of ['lib/package.json', 'lib/skill-evolution/package.json', 'ci/package.json']) {
+  test(`existing CommonJS parent still rejects incompatible selected ${scope}`, f => {
+    f.write(f.marker, '{"type":"commonjs","user":true}\n');
+    f.write(path.join(f.scripts, scope), '{"type":"module"}\n'); const before = snapshot(f.dir);
+    assert.notStrictEqual(f.install().status, 0); assert.deepStrictEqual(snapshot(f.dir), before);
+  });
+}
+test('edited owned CommonJS package bytes are preserved by rejection', f => {
+  f.ok(f.install()); f.write(f.marker, '{"type":"commonjs","userAdded":true}\n');
+  const before = snapshot(f.dir); const result = f.install(); assert.notStrictEqual(result.status, 0);
+  assert.match(result.stderr + result.stdout, /edited.*module boundary/); assert.deepStrictEqual(snapshot(f.dir), before);
+});
+for (const scope of ['package.json', 'lib/package.json']) {
+  test(`symlinked ${scope} refuses before mutation`, f => {
+    const file = path.join(f.scripts, scope); const outside = path.join(f.dir, 'user-package.json');
+    f.write(outside, '{"type":"commonjs"}\n'); fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.symlinkSync(outside, file); const before = snapshot(f.dir);
+    assert.notStrictEqual(f.install().status, 0); assert.deepStrictEqual(snapshot(f.dir), before);
+  });
+}
+for (const scope of ['package.json', 'lib/package.json']) {
+  test(`non-file ${scope} refuses before mutation`, f => {
+    fs.mkdirSync(path.join(f.scripts, scope), { recursive: true }); const before = snapshot(f.dir);
+    assert.notStrictEqual(f.install().status, 0); assert.deepStrictEqual(snapshot(f.dir), before);
+  });
+}
 console.log(`Passed: ${passed}`); console.log(`Failed: ${failed}`); process.exitCode = failed ? 1 : 0;

@@ -30,16 +30,59 @@ function scopedJavaScriptFiles(directory, { nested = false, depth = 0 } = {}) {
   return files;
 }
 
+function assertCommonJSMetadata(content, file) {
+  if (content === null) {
+    if (fs.lstatSync(file, { throwIfNoEntry: false })) {
+      throw new Error(`Refusing CommonJS runtime migration: invalid user module boundary at ${file}.`);
+    }
+    return;
+  }
+  let metadata;
+  try { metadata = JSON.parse(content.toString('utf8')); }
+  catch { throw new Error(`Refusing CommonJS runtime migration: invalid user module boundary at ${file}.`); }
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)
+    || (metadata.type !== undefined && metadata.type !== 'commonjs')) {
+    throw new Error(`Refusing CommonJS runtime migration: preserve the existing user module boundary at ${file}.`);
+  }
+}
+
+function assertSelectedScriptScopes(plan, readFile, scriptsRoot) {
+  const inspected = new Set();
+  for (const operation of plan.operations) {
+    if (operation.kind !== 'copy-file' || !operation.destinationPath.endsWith('.js')) continue;
+    const relative = path.relative(scriptsRoot, operation.destinationPath);
+    if (relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative)) continue;
+    // Check every selected entry/helper, including nested library boundaries
+    // which the unrelated-user-script scope walk intentionally skips.
+    let directory = path.dirname(operation.destinationPath);
+    while (key(directory) !== key(scriptsRoot)) {
+      const file = path.join(directory, 'package.json');
+      if (!inspected.has(key(file))) {
+        assertCommonJSMetadata(readFile(file), file);
+        inspected.add(key(file));
+      }
+      directory = path.dirname(directory);
+    }
+  }
+}
+
 function assertScriptBoundary(plan, { readFile, previousOperations = [], writtenDestinations = new Set(), expectedContent }) {
-  if (plan.adapter?.target !== 'opencode'
-    || !plan.operations.some(operation => isScriptBoundary(operation, plan.targetRoot))) return;
+  if (!plan.operations.some(operation => isScriptBoundary(operation, plan.targetRoot))) return;
   const marker = markerPath(plan.targetRoot);
+  assertSelectedScriptScopes(plan, readFile, path.dirname(marker));
   const content = readFile(marker);
+  assertCommonJSMetadata(content, marker);
   if (content !== null) {
-    const metadata = JSON.parse(content.toString('utf8'));
-    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)
-      || (metadata.type !== undefined && metadata.type !== 'commonjs')) {
-      throw new Error(`Refusing OpenCode CommonJS runtime migration: preserve the existing user module boundary at ${marker}.`);
+    const ownedMarker = previousOperations.find(operation => operation.ownership === 'managed'
+      && isScriptBoundary(operation, plan.targetRoot));
+    // A reinstall bridge may omit digests after preflight validated the old
+    // receipt. At publication the fixed boundary asset still proves its bytes.
+    const expectedMarker = ownedMarker && !ownedMarker.contentSha256
+      ? expectedContent(plan.operations.find(operation => isScriptBoundary(operation, plan.targetRoot))) : null;
+    const markerDigest = ownedMarker?.contentSha256 || (expectedMarker
+      ? crypto.createHash('sha256').update(expectedMarker).digest('hex') : null);
+    if (ownedMarker && crypto.createHash('sha256').update(content).digest('hex') !== markerDigest) {
+      throw new Error(`Refusing CommonJS runtime migration: preserve the edited user module boundary at ${marker}.`);
     }
     // Existing user-owned CommonJS metadata is skipped by the ownership guard;
     // retaining its bytes does not change anyone's module interpretation.
@@ -58,7 +101,7 @@ function assertScriptBoundary(plan, { readFile, previousOperations = [], written
     const expectedDigest = expected === null
       ? operation?.contentSha256 : crypto.createHash('sha256').update(expected).digest('hex');
     if (!expectedDigest || digest !== expectedDigest) {
-      throw new Error(`Refusing OpenCode CommonJS runtime migration: unowned or edited JavaScript at ${file} would change module scope. Give user scripts their own package.json scope before retrying.`);
+      throw new Error(`Refusing CommonJS runtime migration: unowned or edited JavaScript at ${file} would change module scope. Give user scripts their own package.json scope before retrying.`);
     }
   }
 }
