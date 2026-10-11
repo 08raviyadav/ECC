@@ -17,6 +17,7 @@ from llm.core.interface import (
 from llm.core.types import LLMInput, LLMOutput, ModelInfo, ProviderType, ToolCall
 from llm.providers.constants import EMPTY_FILTERED_RESPONSE_ERROR
 from llm.providers.openai_compat import to_openai_message_param
+from llm.providers.reasoning import strip_reasoning
 
 ASTRAFLOW_BASE_URL = "https://api.umodelverse.ai/v1"
 ASTRAFLOW_CN_BASE_URL = "https://api.modelverse.cn/v1"
@@ -105,7 +106,7 @@ class _AstraflowBaseProvider(LLMProvider):
                 }
 
             return LLMOutput(
-                content=choice.message.content or "",
+                content=strip_reasoning(choice.message.content or ""),
                 tool_calls=tool_calls,
                 model=response.model,
                 usage=usage,
