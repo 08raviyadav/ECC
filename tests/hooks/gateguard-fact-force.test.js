@@ -4387,8 +4387,7 @@ function runTests() {
         '1. Name the file(s) and line(s) that will call this new file',
         '2. Confirm no existing file serves the same purpose (search the tree — Glob/Grep, or find/grep via Bash)',
         '3. If this file reads/writes data files, show field names, structure, and date format (use redacted or synthetic values, not raw production data)',
-        '4. Name what outside this repository decides the format, units, timezone or protocol semantics here (the consumer, the producer, or a stated convention), or state that the choice is unconstrained',
-        "5. Quote the user's current instruction verbatim",
+        "4. Quote the user's current instruction verbatim",
         '',
         'If this call was sent in a parallel batch, other edits to src/a.py from that batch may already have been applied. Re-read the file before building on them.',
         '',
@@ -4405,8 +4404,7 @@ function runTests() {
         '1. List ALL files that import/require this file (search the tree — Glob/Grep, or find/grep via Bash)',
         '2. List the public functions/classes affected by this change',
         '3. If this file reads/writes data files, show field names, structure, and date format (use redacted or synthetic values, not raw production data)',
-        '4. Name what outside this repository decides the format, units, timezone or protocol semantics here (the consumer, the producer, or a stated convention), or state that the choice is unconstrained',
-        "5. Quote the user's current instruction verbatim",
+        "4. Quote the user's current instruction verbatim",
         '',
         'If this call was sent in a parallel batch, other edits to src/b.py from that batch may already have been applied. Re-read the file before building on them.',
         '',
@@ -4468,12 +4466,10 @@ function runTests() {
     callers: 'Name the file(s) and line(s) that will call this new file',
     noDuplicate: 'Confirm no existing file serves the same purpose (search the tree — Glob/Grep, or find/grep via Bash)',
     dataSchema: 'If this file reads/writes data files, show field names, structure, and date format (use redacted or synthetic values, not raw production data)',
-    externalContract:
-      'Name what outside this repository decides the format, units, timezone or protocol semantics here (the consumer, the producer, or a stated convention), or state that the choice is unconstrained',
     quote: QUOTE_LINE
   };
-  const B2_FULL_EDIT = [QUESTION_LINES.importers, QUESTION_LINES.publicApi, QUESTION_LINES.dataSchema, QUESTION_LINES.externalContract, QUESTION_LINES.quote];
-  const B2_FULL_WRITE = [QUESTION_LINES.callers, QUESTION_LINES.noDuplicate, QUESTION_LINES.dataSchema, QUESTION_LINES.externalContract, QUESTION_LINES.quote];
+  const B2_FULL_EDIT = [QUESTION_LINES.importers, QUESTION_LINES.publicApi, QUESTION_LINES.dataSchema, QUESTION_LINES.quote];
+  const B2_FULL_WRITE = [QUESTION_LINES.callers, QUESTION_LINES.noDuplicate, QUESTION_LINES.dataSchema, QUESTION_LINES.quote];
 
   clearState();
   if (
@@ -4501,11 +4497,44 @@ function runTests() {
   if (
     test('an Edit that handles data keeps the data-schema question', () => {
       const reason = profileDenialReason('Edit', { file_path: 'src/calc.py', old_string: '    x = 1', new_string: '    rows = json.load(fh)' });
-      assert.deepStrictEqual(listedQuestions(reason), [QUESTION_LINES.localCallers, QUESTION_LINES.dataSchema, QUESTION_LINES.externalContract, QUESTION_LINES.quote]);
+      assert.deepStrictEqual(listedQuestions(reason), [QUESTION_LINES.localCallers, QUESTION_LINES.dataSchema, QUESTION_LINES.quote]);
     })
   )
     passed++;
   else failed++;
+
+  const EXTERNAL_CONTRACT_LINE =
+    'Name what outside this repository decides the format, units, timezone or protocol semantics here (the consumer, the producer, or a stated convention), or state that the choice is unconstrained';
+  for (const value of ['1', 'true', 'ON']) {
+    clearState();
+    if (
+      test(`GATEGUARD_EXTERNAL_CONTRACT_QUESTION=${value} adds the external-contract question beside data-schema`, () => {
+        const env = { GATEGUARD_EXTERNAL_CONTRACT_QUESTION: value };
+        const data = profileDenialReason('Edit', { file_path: 'src/calc.py', old_string: '    x = 1', new_string: '    rows = json.load(fh)' }, env);
+        assert.deepStrictEqual(listedQuestions(data), [QUESTION_LINES.localCallers, QUESTION_LINES.dataSchema, EXTERNAL_CONTRACT_LINE, QUESTION_LINES.quote]);
+        clearState();
+        const unknown = profileDenialReason('Edit', { file_path: 'src/a.rb', old_string: 'a', new_string: 'b' }, env);
+        assert.deepStrictEqual(listedQuestions(unknown), [...B2_FULL_EDIT.slice(0, 3), EXTERNAL_CONTRACT_LINE, QUESTION_LINES.quote]);
+        clearState();
+        const noData = profileDenialReason('Edit', { file_path: 'src/calc.js', old_string: '  return a + 1;', new_string: '  return a * 2;' }, env);
+        assert.deepStrictEqual(listedQuestions(noData), [QUESTION_LINES.localCallers, QUESTION_LINES.quote], 'no data, no external-contract');
+      })
+    )
+      passed++;
+    else failed++;
+  }
+
+  for (const value of ['', '0', 'false', 'off']) {
+    clearState();
+    if (
+      test(`GATEGUARD_EXTERNAL_CONTRACT_QUESTION=${JSON.stringify(value)} keeps the original four code questions`, () => {
+        const reason = profileDenialReason('Edit', { file_path: 'src/a.rb', old_string: 'a', new_string: 'b' }, { GATEGUARD_EXTERNAL_CONTRACT_QUESTION: value });
+        assert.deepStrictEqual(listedQuestions(reason), B2_FULL_EDIT);
+      })
+    )
+      passed++;
+    else failed++;
+  }
 
   clearState();
   if (
@@ -4608,7 +4637,7 @@ function runTests() {
       assert.deepStrictEqual(listedQuestions(exported), [QUESTION_LINES.importers, QUESTION_LINES.publicApi, QUESTION_LINES.quote]);
       clearState();
       const fetch = profileDenialReason('Edit', { file_path: 'scripts/q4.sh', old_string: '  run', new_string: '  curl -s "$URL" > out.json' });
-      assert.deepStrictEqual(listedQuestions(fetch), [QUESTION_LINES.localCallers, QUESTION_LINES.dataSchema, QUESTION_LINES.externalContract, QUESTION_LINES.quote]);
+      assert.deepStrictEqual(listedQuestions(fetch), [QUESTION_LINES.localCallers, QUESTION_LINES.dataSchema, QUESTION_LINES.quote]);
       clearState();
       const ps = profileDenialReason('Edit', { file_path: 'scripts/q5.ps1', old_string: 'function Get-A {', new_string: 'function Get-B {' });
       assert.deepStrictEqual(listedQuestions(ps), [QUESTION_LINES.importers, QUESTION_LINES.publicApi, QUESTION_LINES.quote]);
