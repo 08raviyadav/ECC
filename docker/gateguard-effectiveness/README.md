@@ -21,8 +21,11 @@ where the deciding fact exists only in a simulated user's hidden intent, so an
 agent that does not ask can only guess. Scenario files omit declared gate
 question targets, but this does not establish blind or independent authorship:
 the authors knew the taxonomy, and the external-contract question was added
-after inspecting this corpus. Treat those results as exploratory. The report
-classifies behavior into descriptive hole categories.
+after inspecting this corpus. Treat those results as exploratory. That question
+is now opt-in (`GATEGUARD_EXTERNAL_CONTRACT_QUESTION`), and the runner clears
+every `GATEGUARD_*` variable from the agent's environment, so a `gate` arm
+built from a current candidate tree runs without it. The report classifies
+behavior into descriptive hole categories.
 
 Each run writes `meta.json`, raw `results.jsonl`, transcripts, `summary.json`,
 `holes.md`, and `evidence.json`. The evidence manifest fingerprints the frozen
