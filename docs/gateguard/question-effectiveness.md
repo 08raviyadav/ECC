@@ -259,9 +259,10 @@ the ungated arm failing is what a working trap looks like.
 Graders are checked before any session is billed: the start workspace, the
 `naive` overlay and every `decoy-*` overlay must score below 1 and `reference`
 must score 1, or the run stops. A decoy has the right shape and the wrong
-content. `csv-export-delimiter` has two (a constant in the right dialect, and
-the column names instead of the values), and its grader now checks the
-exported values as well as the dialect. Its grader checked only the dialect
+content. `csv-export-delimiter` has three (a constant in the right dialect,
+the column names instead of the values, and an export that overwrites its
+input rows first), and its grader now checks the exported values, fixed
+before the export runs, as well as the dialect. Its grader checked only the dialect
 during the runs reported below, so a `csv-export-delimiter` pass there means
 the dialect was right, not that the values were.
 
