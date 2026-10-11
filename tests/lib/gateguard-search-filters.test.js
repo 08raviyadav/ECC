@@ -105,6 +105,23 @@ test('rg -T/--type-not excludes the type globs', () => {
   }
 });
 
+test('explicit rg globs take precedence over type alternatives in either flag order', () => {
+  for (const args of [['-t', 'js', '-g', '*.py'], ['-g', '*.py', '--type=js']]) {
+    const item = rgItem([...args, 'tokenizer', 'src']);
+    assert.strictEqual(admitted(item, 'src/tokenizer.js'), false, args.join(' '));
+    assert.strictEqual(admitted(item, 'src/tokenizer.py'), true, args.join(' '));
+  }
+  assert.strictEqual(admitted(rgItem(['-t', 'py', '-g', '*.js']), 'src/tokenizer.js'), true);
+  assert.strictEqual(admitted(rgItem(['-T', 'js', '-g', '*.js']), 'src/tokenizer.js'), true);
+  assert.strictEqual(admitted(rgItem(['-t', 'js', '-g', '!*.js']), 'src/tokenizer.js'), false);
+});
+
+test('Grep tool explicit globs do not gain an alternative from its type', () => {
+  const item = { ...grepToolFilters('*.py', 'js'), scopes: [['.']], pathIncludes: true };
+  assert.strictEqual(admitted(item, 'src/tokenizer.js'), false);
+  assert.strictEqual(admitted(item, 'src/tokenizer.py'), true);
+});
+
 test('unknown or redefined rg types are unreadable filters', () => {
   for (const args of [['-t', 'nosuchtype'], ['-T', 'nosuchtype'], ['--type-add', 'web:*.js', '-t', 'web'], ['--type-clear', 'js']]) {
     assert.strictEqual(admitted(rgItem([...args, 'x']), 'src/tokenizer.js'), false, args.join(' '));
