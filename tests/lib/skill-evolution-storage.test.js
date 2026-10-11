@@ -245,13 +245,31 @@ test('descriptor metadata and final-link failures never expose an empty or incom
   const priorLog = fs.readFileSync(logPath, 'utf8');
   for (const operation of ['fstatSync', 'linkSync']) {
     const original = fs[operation];
+    const openSync = fs.openSync;
+    let publicationDescriptor;
+    let reachedPublication = false;
+    fs.openSync = (file, ...args) => {
+      const descriptor = openSync(file, ...args);
+      const directory = path.basename(path.dirname(file));
+      if (directory.startsWith('.snapshot-') && !directory.startsWith('.snapshot-storage-')) publicationDescriptor = descriptor;
+      return descriptor;
+    };
     const injectedError = Object.assign(new Error(`Injected ${operation} failure`), { code: 'EIO' });
-    fs[operation] = () => { throw injectedError; };
+    fs[operation] = (...args) => {
+      if ((operation === 'fstatSync' && args[0] === publicationDescriptor)
+        || (operation === 'linkSync' && args[1] === path.join(versionsDir, 'v2.md'))) {
+        reachedPublication = true;
+        throw injectedError;
+      }
+      return original(...args);
+    };
     try {
       assert.throws(() => versioning.rollbackTo(skillDir, 1), error => error === injectedError || (error.primaryError === injectedError && /recovery is pending/.test(error.message)));
     } finally {
       fs[operation] = original;
+      fs.openSync = openSync;
     }
+    assert.equal(reachedPublication, true, `${operation} must fail publication after the storage probe succeeds`);
     assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), '# Unsnapshotted work\n');
     assert.equal(fs.existsSync(path.join(versionsDir, 'v2.md')), false);
     assert.deepEqual(versioning.listVersions(skillDir).map(row => row.version), [1]);
@@ -292,8 +310,10 @@ test('snapshot staging cleanup preserves foreign entries and permits a clean lat
   const linkSync = fs.linkSync;
   let foreignPath;
   fs.linkSync = (source, destination) => {
-    foreignPath = path.join(path.dirname(source), 'foreign-owned.txt');
-    fs.writeFileSync(foreignPath, 'foreign work');
+    if (destination === path.join(versionsDir, 'v2.md')) {
+      foreignPath = path.join(path.dirname(source), 'foreign-owned.txt');
+      fs.writeFileSync(foreignPath, 'foreign work');
+    }
     return linkSync(source, destination);
   };
   try {
@@ -301,6 +321,7 @@ test('snapshot staging cleanup preserves foreign entries and permits a clean lat
   } finally {
     fs.linkSync = linkSync;
   }
+  assert.ok(foreignPath, 'foreign entry must be injected into publication staging');
   assert.equal(fs.readFileSync(foreignPath, 'utf8'), 'foreign work');
   assert.equal(fs.readFileSync(live, 'utf8'), '# Unsnapshotted work\n');
   assert.equal(fs.existsSync(path.join(versionsDir, 'v2.md')), false);
@@ -312,8 +333,9 @@ test('snapshot staging cleanup preserves foreign entries and permits a clean lat
   assert.equal(fs.readFileSync(foreignPath, 'utf8'), 'foreign work');
 });
 
+for (const phase of ['storage', 'publication']) {
 for (const foreign of [false, true]) {
-test(`unverified staging directory identity preserves ${foreign ? 'foreign contents' : 'empty directory'} with a pending diagnostic`, fixture => {
+test(`unverified ${phase} staging directory identity preserves ${foreign ? 'foreign contents' : 'empty directory'} with a pending diagnostic`, fixture => {
   const { skillDir, versionsDir } = fixture;
   versioning.createVersion(skillDir);
   fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Unsnapshotted work\n');
@@ -323,7 +345,8 @@ test(`unverified staging directory identity preserves ${foreign ? 'foreign conte
   let stagingDir;
   const primary = Object.assign(new Error('Injected staging identity failure'), { code: 'EIO' });
   fs.lstatSync = (file, ...args) => {
-    if (path.basename(file).startsWith('.snapshot-')) {
+    const name = path.basename(file);
+    if (phase === 'storage' ? name.startsWith('.snapshot-storage-') : name.startsWith('.snapshot-') && !name.startsWith('.snapshot-storage-')) {
       stagingDir = file;
       if (foreign) fs.writeFileSync(path.join(file, 'foreign-owned.txt'), 'preserve');
       throw primary;
@@ -348,6 +371,7 @@ test(`unverified staging directory identity preserves ${foreign ? 'foreign conte
   else assert.deepEqual(fs.readdirSync(stagingDir), []);
 });
 
+}
 }
 
 for (const rollback of [false, true]) {
