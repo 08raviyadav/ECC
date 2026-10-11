@@ -1138,7 +1138,7 @@ function runTests() {
       fs.writeFileSync(scriptsPackagePath, userScriptsPackage);
 
       const firstInstall = run(
-        ['--target', 'claude-project', '--profile', 'core', '--enable-hooks'],
+        ['--target', 'claude-project', '--modules', 'hooks-runtime', '--enable-hooks'],
         { cwd: projectDir, homeDir }
       );
       assert.strictEqual(firstInstall.code, 0, firstInstall.stderr);
@@ -1160,7 +1160,7 @@ function runTests() {
       assert.match(hookResult.stderr, /no-verify/i);
 
       const secondInstall = run(
-        ['--target', 'claude-project', '--profile', 'core', '--enable-hooks'],
+        ['--target', 'claude-project', '--modules', 'hooks-runtime', '--enable-hooks'],
         { cwd: projectDir, homeDir }
       );
       assert.strictEqual(secondInstall.code, 0, secondInstall.stderr);
