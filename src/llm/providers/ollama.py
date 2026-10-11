@@ -19,6 +19,7 @@ from llm.core.types import (
     ProviderType,
     ToolCall,
 )
+from llm.providers.model_config import read_model_env
 
 
 class OllamaProvider(LLMProvider):
@@ -30,7 +31,7 @@ class OllamaProvider(LLMProvider):
         default_model: str | None = None,
     ) -> None:
         self.base_url = base_url or os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-        self.default_model = default_model or os.environ.get("OLLAMA_MODEL", "llama3.2")
+        self.default_model = default_model or read_model_env("OLLAMA_MODEL") or "llama3.2"
         self._models = [
             ModelInfo(
                 name="llama3.2",

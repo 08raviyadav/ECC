@@ -1,5 +1,6 @@
 import io
 import json
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -111,7 +112,7 @@ class TestGetProvider:
 
 class TestSelectedModel:
     @pytest.fixture(autouse=True)
-    def isolated_config(self, monkeypatch, tmp_path):
+    def isolated_config(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.chdir(tmp_path)
         for name in (
             "LLM_PROVIDER", "LLM_MODEL", "OLLAMA_MODEL", "ATLAS_MODEL",
@@ -124,7 +125,7 @@ class TestSelectedModel:
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
     @pytest.mark.parametrize("persist", [False, True])
-    def test_selector_model_reaches_actual_request(self, monkeypatch, persist):
+    def test_selector_model_reaches_actual_request(self, monkeypatch: pytest.MonkeyPatch, persist: bool) -> None:
         save_config("ollama", "mistral", persist=persist)
         urlopen = Mock(side_effect=lambda *args, **kwargs: io.BytesIO(
             b'{"message":{"content":"ok"},"model":"mistral"}'
@@ -142,7 +143,9 @@ class TestSelectedModel:
 
     @pytest.mark.parametrize("provider_type", list(ProviderType))
     @pytest.mark.parametrize("source", ["saved", "environment"])
-    def test_selected_model_applies_to_every_builtin(self, monkeypatch, provider_type, source):
+    def test_selected_model_applies_to_every_builtin(
+        self, monkeypatch: pytest.MonkeyPatch, provider_type: ProviderType, source: str,
+    ) -> None:
         save_config(provider_type.value, "Selected/MixedCase-model", persist=source == "environment")
 
         provider = get_provider()
@@ -150,7 +153,7 @@ class TestSelectedModel:
         assert provider.provider_type == provider_type
         assert provider.get_default_model() == "Selected/MixedCase-model"
 
-    def test_environment_model_overrides_saved_model(self, monkeypatch):
+    def test_environment_model_overrides_saved_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
         save_config("ollama", "mistral")
         monkeypatch.setenv("LLM_MODEL", "codellama")
 
@@ -163,14 +166,16 @@ class TestSelectedModel:
         ("astraflow_cn", "ASTRAFLOW_CN_MODEL"),
         ("astraflow_cn", "ASTRAFLOW_MODEL"),
     ])
-    def test_provider_environment_retains_precedence(self, monkeypatch, provider_type, model_env):
+    def test_provider_environment_retains_precedence(
+        self, monkeypatch: pytest.MonkeyPatch, provider_type: str, model_env: str,
+    ) -> None:
         save_config(provider_type, "saved-model")
         monkeypatch.setenv("LLM_MODEL", "global-model")
         monkeypatch.setenv(model_env, "provider-model")
 
         assert get_provider().get_default_model() == "provider-model"
 
-    def test_cn_specific_environment_overrides_shared_fallback(self, monkeypatch):
+    def test_cn_specific_environment_overrides_shared_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
         save_config("astraflow_cn", "saved-model")
         monkeypatch.setenv("ASTRAFLOW_MODEL", "shared-model")
         monkeypatch.setenv("ASTRAFLOW_CN_MODEL", "cn-model")
@@ -178,21 +183,27 @@ class TestSelectedModel:
         assert get_provider().get_default_model() == "cn-model"
 
     @pytest.mark.parametrize("provider_type", list(ProviderType))
-    def test_explicit_default_model_overrides_selection(self, monkeypatch, provider_type):
+    def test_explicit_default_model_overrides_selection(
+        self, monkeypatch: pytest.MonkeyPatch, provider_type: ProviderType,
+    ) -> None:
         save_config(provider_type.value, "saved-model", persist=True)
         monkeypatch.setenv("OLLAMA_MODEL", "provider-model")
 
         assert get_provider(default_model="explicit-model").get_default_model() == "explicit-model"
 
     @pytest.mark.parametrize("default_model", [None, ""])
-    def test_explicit_empty_default_retains_constructor_fallback(self, monkeypatch, default_model):
+    def test_explicit_empty_default_retains_constructor_fallback(
+        self, monkeypatch: pytest.MonkeyPatch, default_model: str | None,
+    ) -> None:
         save_config("ollama", "saved-model", persist=True)
         monkeypatch.setenv("OLLAMA_MODEL", "provider-model")
 
         assert get_provider(default_model=default_model).get_default_model() == "provider-model"
 
     @pytest.mark.parametrize("explicit", [False, True])
-    def test_provider_override_does_not_inherit_saved_model(self, monkeypatch, explicit):
+    def test_provider_override_does_not_inherit_saved_model(
+        self, monkeypatch: pytest.MonkeyPatch, explicit: bool,
+    ) -> None:
         save_config("openai", "gpt-selected")
         if explicit:
             provider = get_provider("ollama")
@@ -202,14 +213,18 @@ class TestSelectedModel:
 
         assert provider.get_default_model() == "llama3.2"
 
-    def test_explicit_provider_does_not_inherit_another_environment_model(self, monkeypatch):
+    def test_explicit_provider_does_not_inherit_another_environment_model(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         monkeypatch.setenv("LLM_PROVIDER", "openai")
         monkeypatch.setenv("LLM_MODEL", "gpt-selected")
 
         assert get_provider("ollama").get_default_model() == "llama3.2"
 
     @pytest.mark.parametrize("env_provider", [None, "  'OLLAMA'  "])
-    def test_environment_model_applies_to_matching_explicit_provider(self, monkeypatch, env_provider):
+    def test_environment_model_applies_to_matching_explicit_provider(
+        self, monkeypatch: pytest.MonkeyPatch, env_provider: str | None,
+    ) -> None:
         if env_provider is not None:
             monkeypatch.setenv("LLM_PROVIDER", env_provider)
         monkeypatch.setenv("LLM_MODEL", '  "MixedCase/Model"  ')
@@ -218,31 +233,35 @@ class TestSelectedModel:
 
     @pytest.mark.parametrize("source", ["saved", "environment"])
     @pytest.mark.parametrize("model", ["", "   ", '""'])
-    def test_empty_selected_model_retains_default(self, monkeypatch, source, model):
+    def test_empty_selected_model_retains_default(
+        self, monkeypatch: pytest.MonkeyPatch, source: str, model: str,
+    ) -> None:
         save_config("ollama", model, persist=source == "environment")
 
         assert get_provider().get_default_model() == "llama3.2"
 
-    def test_empty_environment_model_falls_back_to_saved_model(self, monkeypatch):
+    def test_empty_environment_model_falls_back_to_saved_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
         save_config("ollama", "mistral")
         monkeypatch.setenv("LLM_MODEL", "  ")
 
         assert get_provider().get_default_model() == "mistral"
 
-    def test_quoted_saved_model_preserves_case(self, tmp_path):
+    def test_quoted_saved_model_preserves_case(self, tmp_path: Path) -> None:
         tmp_path.joinpath(".llm.env").write_text(
             "LLM_PROVIDER='OLLAMA'\nLLM_MODEL='MixedCase/Model'\n"
         )
 
         assert get_provider().get_default_model() == "MixedCase/Model"
 
-    def test_unpaired_saved_model_does_not_override_default_provider(self, tmp_path):
+    def test_unpaired_saved_model_does_not_override_default_provider(self, tmp_path: Path) -> None:
         tmp_path.joinpath(".llm.env").write_text("LLM_MODEL=orphan-model\n")
 
         assert get_provider().get_default_model() == "claude-sonnet-4-6"
 
     @pytest.mark.parametrize("explicit", [False, True])
-    def test_provider_override_does_not_read_invalid_saved_file(self, monkeypatch, tmp_path, explicit):
+    def test_provider_override_does_not_read_invalid_saved_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, explicit: bool,
+    ) -> None:
         tmp_path.joinpath(".llm.env").write_bytes(b"\xff\xfe")
         monkeypatch.setenv("LLM_MODEL", "mistral")
         if explicit:
@@ -253,9 +272,9 @@ class TestSelectedModel:
 
         assert provider.get_default_model() == "mistral"
 
-    def test_registered_provider_keeps_its_constructor_contract(self, monkeypatch):
+    def test_registered_provider_keeps_its_constructor_contract(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class CustomProvider(OllamaProvider):
-            def __init__(self, base_url=None):
+            def __init__(self, base_url: str | None = None) -> None:
                 super().__init__(base_url=base_url, default_model="custom-default")
 
         monkeypatch.setattr(resolver, "_PROVIDER_MAP", resolver._PROVIDER_MAP.copy())
@@ -268,7 +287,7 @@ class TestSelectedModel:
         assert provider.base_url == "http://localhost:1234"
         assert provider.get_default_model() == "custom-default"
 
-    def test_registered_provider_receives_explicit_default_model(self, monkeypatch):
+    def test_registered_provider_receives_explicit_default_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class CustomProvider(OllamaProvider):
             pass
 

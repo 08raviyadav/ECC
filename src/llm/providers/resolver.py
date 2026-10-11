@@ -10,6 +10,7 @@ from llm.core.types import ProviderType
 from llm.providers.astraflow import AstraflowCNProvider, AstraflowProvider
 from llm.providers.atlas import AtlasProvider
 from llm.providers.claude import ClaudeProvider
+from llm.providers.model_config import read_model_env
 from llm.providers.ollama import OllamaProvider
 from llm.providers.openai import OpenAIProvider
 
@@ -78,19 +79,19 @@ def _resolve_default_model(
     provider_type: ProviderType, provider_cls: type[LLMProvider], saved_model: str | None,
 ) -> str | None:
     for name in _MODEL_ENV_VARS[provider_cls]:
-        model = os.environ.get(name)
+        model = read_model_env(name)
         if model:
             return model
 
     env_provider = _strip_env_value(os.environ.get("LLM_PROVIDER", "")).lower()
     if not env_provider or env_provider == provider_type.value:
-        env_model = _strip_env_value(os.environ.get("LLM_MODEL", ""))
+        env_model = read_model_env("LLM_MODEL")
         if env_model:
             return env_model
     return saved_model or None
 
 
-def get_provider(provider_type: ProviderType | str | None = None, **kwargs: str) -> LLMProvider:
+def get_provider(provider_type: ProviderType | str | None = None, **kwargs: str | None) -> LLMProvider:
     """Create a provider, honoring the model selected by llm-select.
 
     Built-in model defaults prefer explicit kwargs, then existing provider-specific
