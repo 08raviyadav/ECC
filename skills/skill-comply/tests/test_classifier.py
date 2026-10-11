@@ -1,5 +1,6 @@
 """Tests for scripts.classifier._parse_classification."""
 
+import json
 import subprocess
 from unittest.mock import patch
 
@@ -17,8 +18,17 @@ class TestParseClassification:
     def test_fenced_json(self) -> None:
         assert _parse_classification('```json\n{"a": [1]}\n```') == {"a": [1]}
 
-    def test_dict_without_list_values_is_empty(self) -> None:
-        assert _parse_classification('{"a": "x"}') == {}
+    @pytest.mark.parametrize("value", ["x", None, True, 1, 1.5, {}])
+    def test_non_list_values_raise(self, value: object) -> None:
+        with pytest.raises(classifier.ClassifierParseError, match="non-list"):
+            _parse_classification(json.dumps({"a": value}))
+
+    def test_mixed_valid_and_non_list_values_raise(self) -> None:
+        with pytest.raises(classifier.ClassifierParseError, match="non-list"):
+            _parse_classification('{"a": [0], "other": "x"}')
+
+    def test_existing_index_coercion_is_preserved(self) -> None:
+        assert _parse_classification('{"a": [true, 2.9, "3"]}') == {"a": [1, 2, 3]}
 
     def test_empty_object_is_valid(self) -> None:
         assert _parse_classification("{}") == {}
@@ -39,7 +49,7 @@ class TestParseClassification:
         assert issubclass(classifier.ClassifierParseError, RuntimeError)
 
 
-@pytest.mark.parametrize("response", ["not JSON", "[]", '{"a": ["x"]}'])
+@pytest.mark.parametrize("response", ["not JSON", "[]", '{"a": ["x"]}', '{"a": "x"}', '{"a": [0], "other": null}'])
 def test_grader_propagates_classifier_parse_failure(response: str) -> None:
     """An invalid successful subprocess response cannot become a zero score."""
     spec = ComplianceSpec(
