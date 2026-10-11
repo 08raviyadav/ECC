@@ -525,7 +525,7 @@ def parse_instinct_file(content: str) -> list[dict]:
     in_frontmatter = False
     content_lines = []
 
-    for line in content.split('\n'):
+    for line in content.removeprefix('\ufeff').split('\n'):
         if line.strip() == '---':
             if in_frontmatter:
                 # End of frontmatter - content comes next
