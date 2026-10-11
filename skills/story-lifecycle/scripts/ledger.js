@@ -232,10 +232,15 @@ function allocate(root, dir, epic, count) {
   fs.mkdirSync(reg, { recursive: true });
   const taken = [...fs.readdirSync(dir), ...fs.readdirSync(reg).map((f) => `${f}.md`)]
     .map((f) => f.match(STORY_FILE)).filter((m) => m && m[1] === epic).map((m) => Number(m[2]));
+  if (taken.some((n) => !Number.isSafeInteger(n))) {
+    throw new LedgerError('existing story ID is not a safe integer');
+  }
   let n = Math.max(0, ...taken);
   const ids = [];
   while (ids.length < count) {
-    const id = `${epic}-${++n}`;
+    n += 1;
+    if (!Number.isSafeInteger(n)) throw new LedgerError('story ID exceeds safe integer range');
+    const id = `${epic}-${n}`;
     try {
       fs.writeFileSync(path.join(reg, id), '', { flag: 'wx' });
       ids.push(id);

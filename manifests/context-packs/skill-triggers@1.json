@@ -10,7 +10,7 @@
     "id": "hand-seeded",
     "source": "manual-curation-pending-regeneration"
   },
-  "registryDigest": "abd597fc032cfab681b4083339491070034f86c947503194499b82771daada8a",
+  "registryDigest": "6a6a4fd5cc80ecda18184f6b35625c99ccc1bb0036c5e30316fa179ae81e451f",
   "schemaVersion": 1,
   "triggers": {
     "skill:agent-runtime-gateway-smoke-test": [
