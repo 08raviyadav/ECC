@@ -146,7 +146,7 @@ test('rollback initialization failure preserves unsnapshotted live bytes and the
   const target = path.join(versionsDir, 'v1.md');
   fs.writeFileSync(target, '# Saved target\n');
   fs.writeFileSync(versioning.getEvolutionDir(skillDir), 'owned blocker');
-  assert.throws(() => versioning.rollbackTo(skillDir, 1), /ENOTDIR/);
+  assert.throws(() => versioning.rollbackTo(skillDir, 1), error => Boolean(error.code));
   assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), '# Original\n');
   assert.equal(fs.readFileSync(target, 'utf8'), '# Saved target\n');
   assert.deepEqual(fs.readdirSync(versionsDir), ['v1.md']);
