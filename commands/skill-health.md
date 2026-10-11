@@ -52,3 +52,7 @@ node "$ECC_ROOT/scripts/skills-health.js" --dashboard --json
 - **Failure Patterns** — Clustered failure reasons with horizontal bar chart
 - **Pending Amendments** — Amendment proposals awaiting review
 - **Version History** — Timeline of version snapshots per skill
+
+## Snapshot storage
+
+Snapshot creation and rollback require writable storage with hardlink support. The versioning API checks that capability before creating or changing version history and refuses unsupported storage without a copy fallback. Use a hardlink-capable location for new snapshots. Reading existing health and version history does not require creating hard links.

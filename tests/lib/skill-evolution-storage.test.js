@@ -350,6 +350,34 @@ test(`unverified staging directory identity preserves ${foreign ? 'foreign conte
 
 }
 
+for (const rollback of [false, true]) {
+  test(`${rollback ? 'rollback' : 'snapshot'} rejects unsupported hardlink storage before initializing history`, fixture => {
+    const { skillDir, versionsDir } = fixture;
+    if (rollback) {
+      fs.mkdirSync(versionsDir);
+      fs.writeFileSync(path.join(versionsDir, 'v1.md'), '# Saved target\n');
+    }
+    const linkSync = fs.linkSync;
+    const primary = Object.assign(new Error('Injected unsupported hard links'), { code: 'EOPNOTSUPP' });
+    fs.linkSync = () => { throw primary; };
+    try {
+      assert.throws(() => rollback ? versioning.rollbackTo(skillDir, 1) : versioning.createVersion(skillDir), error =>
+        /requires hardlink-capable storage/.test(error.message) && error.primaryError === primary);
+    } finally {
+      fs.linkSync = linkSync;
+    }
+    assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), '# Original\n');
+    assert.equal(fs.existsSync(versioning.getEvolutionDir(skillDir)), false);
+    if (rollback) {
+      assert.deepEqual(fs.readdirSync(versionsDir), ['v1.md']);
+      assert.equal(fs.readFileSync(path.join(versionsDir, 'v1.md'), 'utf8'), '# Saved target\n');
+    } else assert.equal(fs.existsSync(versionsDir), false);
+    assert.equal(fs.readdirSync(skillDir).filter(name => name.startsWith('.snapshot-')).length, 0);
+    const snapshot = versioning.createVersion(skillDir);
+    assert.equal(snapshot.version, rollback ? 2 : 1);
+  });
+}
+
 test('successful rollback snapshots restored content and retains earlier targets for another rollback', fixture => {
   const { skillDir } = fixture;
   versioning.createVersion(skillDir);

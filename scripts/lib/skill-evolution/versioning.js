@@ -231,8 +231,8 @@ function removeOwnedStaging(staging, contentIdentity) {
   fs.rmdirSync(staging.path);
 }
 
-function prepareStaging(versionsDir) {
-  const stagingDir = fs.mkdtempSync(path.join(versionsDir, '.snapshot-'));
+function prepareStaging(versionsDir, prefix = '.snapshot-') {
+  const stagingDir = fs.mkdtempSync(path.join(versionsDir, prefix));
   try {
     return { path: stagingDir, contentPath: path.join(stagingDir, 'content.md'), identity: fs.lstatSync(stagingDir) };
   } catch (primaryError) {
@@ -244,10 +244,54 @@ function prepareStaging(versionsDir) {
   }
 }
 
+function verifySnapshotStorage(skillPath) {
+  const versionsDir = getVersionsDir(skillPath);
+  const base = fs.existsSync(versionsDir) ? versionsDir : normalizeSkillDir(skillPath);
+  const staging = prepareStaging(base, '.snapshot-storage-');
+  const linkPath = path.join(staging.path, 'hardlink-check.md');
+  let identity;
+  let linked = false;
+  let linking = false;
+  try {
+    const descriptor = fs.openSync(staging.contentPath, 'wx');
+    try {
+      identity = fs.fstatSync(descriptor);
+      fs.writeFileSync(descriptor, 'ECC snapshot storage check\n', 'utf8');
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    linking = true;
+    fs.linkSync(staging.contentPath, linkPath);
+    linked = true;
+    linking = false;
+    removeOwnedSnapshot({ path: linkPath, identity });
+    linked = false;
+    removeOwnedStaging(staging, identity);
+  } catch (primaryError) {
+    try {
+      if (linked) removeOwnedSnapshot({ path: linkPath, identity });
+      removeOwnedStaging(staging, identity);
+    } catch (recoveryError) {
+      const error = new Error(`${primaryError.message}; storage-check cleanup failed: ${recoveryError.message}; recovery is pending`, { cause: primaryError });
+      error.primaryError = primaryError;
+      error.recoveryError = recoveryError;
+      throw error;
+    }
+    if (linking && ['ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EPERM', 'EXDEV', 'EINVAL'].includes(primaryError.code)) {
+      const error = new Error(`Skill versioning requires hardlink-capable storage for snapshot creation and rollback; capability check failed before history initialization (${primaryError.code})`, { cause: primaryError });
+      error.code = primaryError.code;
+      error.primaryError = primaryError;
+      throw error;
+    }
+    throw primaryError;
+  }
+}
+
 function publishVersion(skillPath, skillContent, options) {
   ensureSkillExists(skillPath);
   const nextVersion = allocateSnapshotVersion(skillPath);
   const versionsDir = getVersionsDir(skillPath);
+  verifySnapshotStorage(skillPath);
   ensureSkillVersioning(skillPath);
   const staging = prepareStaging(versionsDir);
   const stagedPath = staging.contentPath;
@@ -294,6 +338,7 @@ function recordSnapshot(skillPath, snapshot, options) {
   return { version: snapshot.version, path: snapshot.path, created_at: snapshot.created_at };
 }
 
+/** Snapshot creation requires hardlink-capable storage, checked before history initialization. */
 function createVersion(skillPath, options = {}) {
   const skillFilePath = ensureSkillExists(skillPath);
   const skillContent = fs.readFileSync(skillFilePath, 'utf8');
