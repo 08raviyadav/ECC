@@ -68,9 +68,6 @@
         "scripts/harness-audit.js",
         "scripts/skills-health.js",
         "scripts/lib/skill-evolution",
-        "scripts/lib/utils.js",
-        "scripts/lib/agent-data-home.js",
-        "scripts/lib/path-safety.js",
         "scripts/lib/astra-review",
         "scripts/ci/validate-skill-host-compat.js",
         "scripts/ci/validate-skills.js"
@@ -91,7 +88,9 @@
         "kimi",
         "adal"
       ],
-      "dependencies": [],
+      "dependencies": [
+        "shared-script-utils"
+      ],
       "defaultInstall": true,
       "cost": "medium",
       "stability": "stable"
@@ -151,9 +150,6 @@
         "scripts/auto-update.js",
         "scripts/setup-package-manager.js",
         "scripts/lib/package-manager.js",
-        "scripts/lib/utils.js",
-        "scripts/lib/agent-data-home.js",
-        "scripts/lib/path-safety.js",
         ".hermes",
         ".openclaw",
         ".kimi",
@@ -177,7 +173,9 @@
         "kimi",
         "adal"
       ],
-      "dependencies": [],
+      "dependencies": [
+        "shared-script-utils"
+      ],
       "defaultInstall": true,
       "cost": "light",
       "stability": "stable"
@@ -1421,6 +1419,38 @@
       "defaultInstall": false,
       "cost": "light",
       "stability": "beta"
+    },
+    {
+      "id": "shared-script-utils",
+      "kind": "platform",
+      "description": "Shared utility files required by installed commands and platform tools.",
+      "paths": [
+        "scripts/lib/utils.js",
+        "scripts/lib/agent-data-home.js",
+        "scripts/lib/path-safety.js"
+      ],
+      "targets": [
+        "claude",
+        "claude-project",
+        "cursor",
+        "copilot",
+        "antigravity",
+        "opencode",
+        "codebuddy",
+        "joycode",
+        "qwen",
+        "zed",
+        "hermes",
+        "openclaw",
+        "kimi",
+        "adal",
+        "codex",
+        "gemini"
+      ],
+      "dependencies": [],
+      "defaultInstall": false,
+      "cost": "light",
+      "stability": "stable"
     }
   ]
 }

@@ -383,6 +383,7 @@ function runTests() {
           'platform-configs',
           'skill-unified-memory',
           'workflow-quality',
+          'shared-script-utils',
         ]
       );
       assert.ok(
@@ -972,7 +973,8 @@ function runTests() {
           'commands-core',
           'platform-configs',
           'skill-unified-memory',
-          'workflow-quality'
+          'workflow-quality',
+          'shared-script-utils'
         ]
       );
       assert.ok(state.resolution.skippedModules.includes('hooks-runtime'));
