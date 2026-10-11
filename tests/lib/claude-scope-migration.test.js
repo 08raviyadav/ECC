@@ -514,6 +514,7 @@ test('source uninstall failure reports both scopes and exact forward recovery', 
     assert.strictEqual(error.phase, 'source-uninstall');
     assert.deepStrictEqual([...error.observedScopes].sort(), ['project', 'user']);
     assert.deepStrictEqual(error.recovery, [
+      'claude plugin list --json',
       'claude plugin uninstall ecc@ecc --scope user --keep-data',
       'ecc setup --mode claude-plugin --scope project --move-scope --yes',
     ]);
@@ -667,6 +668,171 @@ test('migration preserves an explicit includeCoAuthoredBy opt-in', () => {
     const settings = JSON.parse(fs.readFileSync(fixture.settingsPath, 'utf8'));
     assert.strictEqual(settings.includeCoAuthoredBy, true);
     assert.strictEqual(settings.pluginConfigs['ecc@ecc'].options.hook_profile, 'strict');
+  });
+});
+
+function writeExplicitDisable(filePath, pluginId = 'ecc@ecc') {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify({
+    enabledPlugins: { [pluginId]: false },
+  }, null, 2)}\n`);
+}
+
+test('an explicitly disabled resume destination names the setting and the enable recovery', () => {
+  withFixture({
+    plugins: [plugin('user'), plugin('local', { enabled: false })],
+    marketplaces: [marketplace('user')],
+  }, fixture => {
+    const localSettings = path.join(
+      fixture.projectRoot,
+      '.claude',
+      'settings.local.json'
+    );
+    writeExplicitDisable(localSettings);
+    const error = captureError(() => (
+      migrateClaudePluginScope(migrationOptions(fixture, 'local'))
+    ));
+    assert.strictEqual(error.code, 'DESTINATION_EXPLICITLY_DISABLED');
+    assert.strictEqual(error.phase, 'destination-verification');
+    assert.match(error.message, /enabledPlugins/);
+    assert.ok(error.message.includes(localSettings));
+    assert.deepStrictEqual(error.observedScopes, ['user', 'local']);
+    assert.deepStrictEqual(error.recovery, [
+      'claude plugin enable ecc@ecc --scope local',
+      'ecc setup --mode claude-plugin --scope local --move-scope --yes',
+    ]);
+    assert.deepStrictEqual(readCalls(fixture), [
+      ['plugin', 'list', '--json'],
+    ]);
+    assert.ok(!readCalls(fixture).some(argv => argv[1] === 'uninstall'));
+    assert.deepStrictEqual(
+      readState(fixture).plugins.map(entry => entry.scope).sort(),
+      ['local', 'user']
+    );
+    assert.strictEqual(JSON.parse(
+      fs.readFileSync(localSettings, 'utf8')
+    ).enabledPlugins['ecc@ecc'], false);
+  });
+});
+
+test('a single-scope explicitly disabled destination is not a generic verification failure', () => {
+  for (const { scope, settingsPath } of [
+    { scope: 'user', settingsPath: 'config' },
+    { scope: 'project', settingsPath: 'project-settings' },
+    { scope: 'local', settingsPath: 'project-settings' },
+    { scope: 'local', settingsPath: 'project-local-settings' },
+  ]) {
+    withFixture({ plugins: [plugin(scope, { enabled: false })] }, fixture => {
+      const explicitPaths = {
+        config: fixture.settingsPath,
+        'project-settings': path.join(
+          fixture.projectRoot, '.claude', 'settings.json'
+        ),
+        'project-local-settings': path.join(
+          fixture.projectRoot, '.claude', 'settings.local.json'
+        ),
+      };
+      const disabledPath = explicitPaths[settingsPath];
+      writeExplicitDisable(disabledPath);
+      const error = captureError(() => (
+        migrateClaudePluginScope(migrationOptions(fixture, scope))
+      ));
+      assert.strictEqual(error.code, 'DESTINATION_EXPLICITLY_DISABLED');
+      assert.ok(error.message.includes(disabledPath));
+      assert.deepStrictEqual(error.recovery, [
+        `claude plugin enable ecc@ecc --scope ${scope}`,
+        `ecc setup --mode claude-plugin --scope ${scope} --move-scope --yes`,
+      ]);
+    });
+  }
+});
+
+test('a disabled destination without an explicit setting stays generic and gains the enable path', () => {
+  withFixture({ plugins: [plugin('local', { enabled: false })] }, fixture => {
+    const error = captureError(() => (
+      migrateClaudePluginScope(migrationOptions(fixture, 'local'))
+    ));
+    assert.strictEqual(error.code, 'DESTINATION_VERIFICATION_FAILED');
+    assert.match(error.message, /exists at local scope but is not enabled/);
+    assert.deepStrictEqual(error.recovery, [
+      'claude plugin enable ecc@ecc --scope local',
+      'ecc setup --mode claude-plugin --scope local --move-scope --yes',
+    ]);
+  });
+});
+
+test('a source uninstall that errors but removes the source accepts the verified destination', () => {
+  withFixture({
+    plugins: [plugin('user'), plugin('project')],
+    marketplaces: [marketplace('user')],
+    failures: [{
+      argv: uninstallArgv('user'),
+      status: 9,
+      stderr: 'uninstall failed',
+      times: 1,
+    }],
+    pluginListResponses: [
+      [plugin('user'), plugin('project')],
+      [plugin('user'), plugin('project')],
+      [plugin('user'), plugin('project')],
+      [plugin('project'), plugin('local')],
+      [plugin('project')],
+    ],
+  }, fixture => {
+    const result = migrateClaudePluginScope(
+      migrationOptions(fixture, 'project')
+    );
+    assert.strictEqual(result.action, 'resumed');
+    assert.strictEqual(result.sourceScope, 'user');
+    assert.deepStrictEqual(result.warnings, [
+      'Claude reported an uninstall error, but destination-only state was verified.',
+    ]);
+    assert.ok(!readCalls(fixture).slice(-2).some(argv => argv[1] === 'uninstall'));
+  });
+});
+
+test('source uninstall failure recovery stops suggesting an already-absent source', () => {
+  withFixture({
+    plugins: [plugin('user'), plugin('project')],
+    marketplaces: [marketplace('user')],
+    failures: [{
+      argv: uninstallArgv('user'),
+      status: 9,
+      stderr: 'uninstall failed',
+      times: 1,
+    }],
+    pluginListResponses: [
+      [plugin('user'), plugin('project')],
+      [plugin('user'), plugin('project')],
+      [plugin('user'), plugin('project')],
+      [],
+    ],
+  }, fixture => {
+    const error = captureError(() => (
+      migrateClaudePluginScope(migrationOptions(fixture, 'project'))
+    ));
+    assert.strictEqual(error.code, 'SOURCE_UNINSTALL_FAILED');
+    assert.strictEqual(error.phase, 'source-uninstall');
+    assert.deepStrictEqual(error.observedScopes, []);
+    assert.deepStrictEqual(error.recovery, [
+      'claude plugin list --json',
+      'ecc setup --mode claude-plugin --scope project --yes',
+    ]);
+  });
+});
+
+test('a two-scope disabled destination offers enable recovery without removing the source', () => {
+  withFixture({
+    plugins: [plugin('user'), plugin('project', { enabled: false })],
+    marketplaces: [marketplace('user')],
+  }, fixture => {
+    const error = captureError(() => migrateClaudePluginScope(migrationOptions(fixture, 'project')));
+    assert.strictEqual(error.code, 'DESTINATION_VERIFICATION_FAILED');
+    assert.deepStrictEqual(error.recovery, [
+      'claude plugin enable ecc@ecc --scope project',
+      'ecc setup --mode claude-plugin --scope project --move-scope --yes',
+    ]);
+    assert.ok(!readCalls(fixture).some(argv => argv[1] === 'uninstall'));
   });
 });
 

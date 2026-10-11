@@ -381,11 +381,41 @@ function runTests() {
         [{ ...valid, recorded_at: 'not-a-date' }, /recorded_at must be/],
         [{ ...valid, tokens_used: 'lots' }, /tokens_used must be a number/],
         [{ ...valid, duration_ms: Number.POSITIVE_INFINITY }, /duration_ms must be a number/],
+        ...[42, 0, false, {}, []].flatMap(value => [
+          [{ ...valid, failure_reason: value }, /failure_reason must be a string or null/],
+          [{ ...valid, failureReason: value }, /failure_reason must be a string or null/],
+        ]),
       ];
 
       for (const [payload, expectedError] of cases) {
         assert.throws(() => tracker.normalizeExecutionRecord(payload), expectedError);
       }
+      for (const value of [null, '', 'Useful detail']) {
+        assert.strictEqual(
+          tracker.normalizeExecutionRecord({ ...valid, failureReason: value }).failure_reason,
+          value || null
+        );
+      }
+      for (const snake of ['', null, undefined]) {
+        assert.strictEqual(tracker.normalizeExecutionRecord({
+          ...valid, failure_reason: snake, failureReason: 'Useful detail',
+        }).failure_reason, 'Useful detail');
+      }
+      assert.strictEqual(tracker.normalizeExecutionRecord({
+        ...valid, failure_reason: 'Primary detail', failureReason: 'Other detail',
+      }).failure_reason, 'Primary detail');
+      for (const value of [42, 0, false, {}, []]) {
+        for (const payload of [
+          { ...valid, failure_reason: value, failureReason: 'Useful detail' },
+          { ...valid, failure_reason: '', failureReason: value },
+        ]) assert.throws(() => tracker.normalizeExecutionRecord(payload), /failure_reason must be a string or null/);
+      }
+      const invalidRunsFile = path.join(homeDir, '.claude', 'state', 'invalid-reason-runs.jsonl');
+      assert.throws(
+        () => tracker.recordSkillExecution({ ...valid, failure_reason: 42 }, { runsFilePath: invalidRunsFile }),
+        /failure_reason must be a string or null/
+      );
+      assert.ok(!fs.existsSync(invalidRunsFile), 'invalid reasons must be rejected before writing a run');
     })) passed++; else failed++;
 
     if (test('uses state-store adapters for recording and reading when available', () => {

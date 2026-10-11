@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 
 const {
@@ -43,6 +44,63 @@ function recoveryCommands(sourceScope, destinationScope) {
     `ecc setup --mode claude-plugin --scope ${destinationScope} --move-scope --yes`
   );
   return commands;
+}
+
+function enableRecoveryCommands(destinationScope) {
+  return [
+    `claude plugin enable ${CURRENT_PLUGIN_ID} --scope ${destinationScope}`,
+    ...recoveryCommands(null, destinationScope),
+  ];
+}
+
+function destinationSettingsPaths(paths, destinationScope) {
+  const projectSettingsDir = path.join(paths.projectRoot, '.claude');
+  if (destinationScope === 'user') {
+    return [path.join(paths.configDir, 'settings.json')];
+  }
+  if (destinationScope === 'project') {
+    return [path.join(projectSettingsDir, 'settings.json')];
+  }
+  return [
+    path.join(projectSettingsDir, 'settings.local.json'),
+    path.join(projectSettingsDir, 'settings.json'),
+  ];
+}
+
+function readExplicitlyDisabledSettings(settingsPath) {
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    return settings?.enabledPlugins?.[CURRENT_PLUGIN_ID] === false;
+  } catch {
+    // Missing or unreadable settings are not an explicit user choice.
+    return false;
+  }
+}
+
+function destinationExplicitlyDisabledError(paths, plugins, destinationScope) {
+  const installed = currentEccPlugins(plugins);
+  const destination = installed.find(plugin => plugin.scope === destinationScope);
+  if (!destination || destination.enabled === true) {
+    return null;
+  }
+  const disabledSettingsPaths = destinationSettingsPaths(paths, destinationScope)
+    .filter(readExplicitlyDisabledSettings);
+  if (disabledSettingsPaths.length === 0) {
+    return null;
+  }
+  return migrationError(
+    'DESTINATION_EXPLICITLY_DISABLED',
+    `${CURRENT_PLUGIN_ID} is installed at ${destinationScope} scope but explicitly `
+    + `disabled by enabledPlugins["${CURRENT_PLUGIN_ID}"]: false in `
+    + `${disabledSettingsPaths.join(', ')}. ECC keeps that choice and will not `
+    + `rewrite the setting; enable the plugin to continue the migration.`,
+    {
+      phase: 'destination-verification',
+      observedScopes: installed.map(plugin => plugin.scope),
+      settingsPaths: disabledSettingsPaths,
+      recovery: enableRecoveryCommands(destinationScope),
+    }
+  );
 }
 
 function readPluginInventory(run, projectRoot, phase) {
@@ -95,7 +153,7 @@ function assertMigrationInventory(plugins, destinationScope) {
         {
           phase: 'destination-verification',
           observedScopes,
-          recovery: recoveryCommands(null, destinationScope),
+          recovery: enableRecoveryCommands(destinationScope),
         }
       );
     }
@@ -171,8 +229,10 @@ function plannedActions(migration, destinationScope, marketplaceAction) {
 
 function verifySourceAndDestination(run, paths, migration, destinationScope, phase) {
   const expectedScopes = [migration.sourceScope, destinationScope];
+  const plugins = readPluginInventory(run, paths.projectRoot, phase);
+  const destination = currentEccPlugins(plugins).find(plugin => plugin.scope === destinationScope);
   return validateExpectedScopes(
-    readPluginInventory(run, paths.projectRoot, phase),
+    plugins,
     expectedScopes,
     {
       code: phase === 'concurrency-check'
@@ -183,7 +243,9 @@ function verifySourceAndDestination(run, paths, migration, destinationScope, pha
         ? 'Claude plugin scopes changed during migration; the source was not removed.'
         : `Could not verify ${CURRENT_PLUGIN_ID} at the destination before source cleanup.`,
       phase,
-      recovery: recoveryCommands(null, destinationScope),
+      recovery: destination && destination.enabled !== true
+        ? enableRecoveryCommands(destinationScope)
+        : recoveryCommands(null, destinationScope),
     }
   );
 }
@@ -208,23 +270,32 @@ function uninstallSource(run, paths, migration, destinationScope) {
       assertNoConflictingEccPlugins(plugins);
       const installed = currentEccPlugins(plugins);
       observedScopes = installed.map(plugin => plugin.scope);
+      const destination = installed.find(
+        plugin => plugin.scope === destinationScope
+      );
       if (
-        installed.length === 1
-        && installed[0].scope === destinationScope
-        && installed[0].enabled === true
+        destination
+        && destination.enabled !== false
+        && !installed.some(plugin => plugin.scope === migration.sourceScope)
       ) {
         return ['Claude reported an uninstall error, but destination-only state was verified.'];
       }
     } catch {
       // Preserve the safest known two-scope state in the structured recovery.
     }
+    const sourcePresent = observedScopes.includes(migration.sourceScope);
     throw migrationError(
       'SOURCE_UNINSTALL_FAILED',
       `The destination is installed, but Claude could not remove the ${migration.sourceScope} source scope.`,
       {
         phase: 'source-uninstall',
         observedScopes,
-        recovery: recoveryCommands(migration.sourceScope, destinationScope),
+        recovery: [
+          'claude plugin list --json',
+          ...(observedScopes.length === 0
+            ? [`ecc setup --mode claude-plugin --scope ${destinationScope} --yes`]
+            : recoveryCommands(sourcePresent ? migration.sourceScope : null, destinationScope)),
+        ],
       }
     );
   }
@@ -265,6 +336,14 @@ function migrateClaudePluginScope(options = {}, dependencies = {}) {
     ? createDryRunClaudeRunner(providerRun, paths, options)
     : providerRun;
   const plugins = readPluginInventory(run, paths.projectRoot, 'inventory');
+  const disabledDestinationError = destinationExplicitlyDisabledError(
+    paths,
+    plugins,
+    options.scope
+  );
+  if (disabledDestinationError) {
+    throw disabledDestinationError;
+  }
   const migration = assertMigrationInventory(plugins, options.scope);
   const hooks = options.hooks === undefined
     ? deriveHookMode(settings)
