@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from scripts.runner import _parse_stream_json, _setup_sandbox, run_scenario
+from scripts.runner import SANDBOX_BASE, _parse_stream_json, _safe_sandbox_dir, _setup_sandbox, run_scenario
 
 
 @dataclass(frozen=True)
@@ -19,6 +19,37 @@ class _FakeScenario:
     id: str
     prompt: str = "do nothing"
     setup_commands: tuple[str, ...] = ()
+
+
+class TestSafeSandboxDirectory:
+    def test_empty_id_cannot_delete_the_shared_base(self):
+        with (
+            patch("scripts.runner.Path.exists", return_value=True),
+            patch("scripts.runner.shutil.rmtree") as remove,
+            patch("scripts.runner.Path.mkdir") as mkdir,
+            patch("scripts.runner.subprocess.run") as execute,
+        ):
+            execute.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            with pytest.raises(ValueError, match="sandbox"):
+                run_scenario(_FakeScenario(id=""))
+            remove.assert_not_called()
+            mkdir.assert_not_called()
+            execute.assert_not_called()
+
+    def test_resolved_base_is_not_a_scenario_directory(self):
+        with patch("scripts.runner.Path.resolve", return_value=SANDBOX_BASE):
+            with pytest.raises(ValueError, match="sandbox"):
+                _safe_sandbox_dir("alias")
+
+    def test_valid_id_keeps_existing_sanitization(self):
+        assert _safe_sandbox_dir("scenario/one") == SANDBOX_BASE / "scenario_one"
+
+    def test_resolved_escape_is_still_rejected(self, tmp_path, monkeypatch):
+        base = tmp_path / "sandbox"
+        monkeypatch.setattr("scripts.runner.SANDBOX_BASE", base)
+        with patch.object(Path, "resolve", side_effect=[tmp_path / "outside", base]):
+            with pytest.raises(ValueError):
+                _safe_sandbox_dir("escape")
 
 
 class TestSetupSandboxSkipsShellBuiltins:
