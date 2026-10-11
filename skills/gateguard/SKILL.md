@@ -368,10 +368,21 @@ An Edit, Write, NotebookEdit, or MultiEdit entry is allowed, with an
   the hook cannot see, so such a segment never credits. File-name globs that
   restrict a search (Grep `glob: '*.py'`, `rg -g '*.py'`, `grep --include`,
   `find -name`, `tree -P`, `-Include`/`-Filter`) must match the target's file
-  name for its stem to count.
+  name for its stem to count. File types filter the same way: `rg -t`/
+  `--type` and the Grep `type` include the type's globs, `rg -T`/`--type-not`
+  exclude them, and `fd -e`/`--extension` includes `*.<ext>`, so
+  `rg -t py tokenizer src` never credits `tokenizer.js`. An unknown type name,
+  `--type-add`, or `--type-clear` makes the segment never credit.
+- **Lookups are not searches:** a search confined to the target's own file
+  name — every include glob, the Glob pattern, or every path pattern ends in
+  that exact name (`Glob **/tokenizer.js`, `find -name tokenizer.js`,
+  `rg -g tokenizer.js`, Grep `glob: 'tokenizer.js'`) — could only find the
+  target, so it never credits it. `Glob **/tokenizer.*` still does.
 - **Scope:** `Glob`, `Grep`, and `LS` only credit a target strictly inside the
   directory they searched (their `path`, else the tool `cwd`, plus a Glob
-  pattern's literal leading directories). A Glob without glob characters is a
+  pattern's literal leading directories). A Glob pattern is a filter too: it
+  must match the target's path for the stem to count, so `Glob **/tokenizer.py`
+  never credits `tokenizer.js`. A Glob without glob characters is a
   one-file lookup: it names no directory and credits only files directly in
   its directory, never the looked-up file itself. A search whose path is the target is not a search.
 - **Shell segments:** a segment without a path operand counts only when it is
@@ -384,7 +395,8 @@ An Edit, Write, NotebookEdit, or MultiEdit entry is allowed, with an
   characters, never credit.
 - **Shell scope:** a shell segment only credits a target equal to or inside
   one of its path operands (resolved against the tool `cwd`; a glob operand
-  counts as its literal directory), or inside the `cwd` when it has none:
+  must match the target or a directory above it, and a git pathspec's `*`
+  also matches `/`), or inside the `cwd` when it has none:
   `rg payment docs` or `grep -rn payment /usr/share/doc` never credit
   `src/payment.py`. An input redirection before any operand
   (`rg payment < file`) or a `<` inside a word reads stdin and never counts.

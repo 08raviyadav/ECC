@@ -5669,12 +5669,23 @@ function runTests() {
     ['Grep widget glob *.{py,js} (braces are one glob)', 'Grep', { pattern: 'widget', glob: '*.{py,js}', path: creditRoot }],
     ['Grep widget glob !node_modules/**', 'Grep', { pattern: 'widget', glob: '!node_modules/**', path: creditRoot }],
     ['grep --exclude-dir=node_modules widget', 'Bash', { command: 'grep -r --exclude-dir=node_modules widget .' }],
-    ['find -name widget.py', 'Bash', { command: 'find . -name widget.py' }],
-    ['Grep TODO glob widget.py (positive glob names the stem)', 'Grep', { pattern: 'TODO', glob: 'widget.py', path: creditRoot }]
+    ["find -name 'widget.*'", 'Bash', { command: "find . -name 'widget.*'" }],
+    ['Grep TODO glob widget.* (positive glob names the stem)', 'Grep', { pattern: 'TODO', glob: 'widget.*', path: creditRoot }]
   ];
   for (const [label, name, input] of exclusionCredited) {
     gateCase(`control still credits (${label})`, () => {
       assertCredited(creditEdit(exclusionTarget, exclusionTurn(name, input)), label);
+    });
+  }
+  // A search confined to the target's own file name read the target rather than searched for it.
+  const lookupDenied = [
+    ['find -name widget.py', 'Bash', { command: 'find . -name widget.py' }],
+    ['Grep TODO glob widget.py', 'Grep', { pattern: 'TODO', glob: 'widget.py', path: creditRoot }]
+  ];
+  for (const [label, name, input] of lookupDenied) {
+    gateCase(`a lookup of the target by its own name never credits it (${label})`, () => {
+      assertNotCredited(creditEdit(exclusionTarget, exclusionTurn(name, input)), label);
+      assert.ok(!readState().fact_force_credited, `${label}: nothing credited`);
     });
   }
 
@@ -5780,15 +5791,20 @@ function runTests() {
     });
   }
   const psCredited = [
-    'Get-ChildItem -Path src -Recurse -Filter widget.py',
-    'Get-ChildItem -Recurse -Filt:widget.py',
+    'Get-ChildItem -Path src -Recurse -Filter widget.*',
+    'Get-ChildItem -Recurse -Filt:widget.*',
     'Get-ChildItem -Recurse -Include a.md, widget.py',
-    'Get-ChildItem -Recurse -Exclude a.md, b.md -Filter widget.py',
+    'Get-ChildItem -Recurse -Exclude a.md, b.md -Filter widget.*',
     'Select-String -Pattern widget -Path src/* -Exclude a.md'
   ];
   for (const command of psCredited) {
     gateCase(`PowerShell control still credits (${command})`, () => {
       assertCredited(creditEdit(exclusionTarget, exclusionTurn('PowerShell', { command })), command);
+    });
+  }
+  for (const command of ['Get-ChildItem -Path src -Recurse -Filter widget.py', 'Get-ChildItem -Recurse -Filt:widget.py']) {
+    gateCase(`a PowerShell lookup of the target by its own name never credits it (${command})`, () => {
+      assertNotCredited(creditEdit(exclusionTarget, exclusionTurn('PowerShell', { command })), command);
     });
   }
   gateCase('PowerShell include lists spread across tokens still filter the target', () => {
