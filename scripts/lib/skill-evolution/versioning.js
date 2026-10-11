@@ -101,6 +101,9 @@ function listVersions(skillPath) {
 
       const filePath = path.join(versionsDir, fileName);
       const stats = fs.statSync(filePath);
+      if (!stats.isFile()) {
+        return null;
+      }
 
       return {
         version,
