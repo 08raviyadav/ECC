@@ -58,7 +58,15 @@ class OllamaProvider(LLMProvider):
         base_url: str | None = None,
         default_model: str | None = None,
         prefilled_reasoning: bool | None = None,
+        leading_reasoning: bool | None = None,
     ) -> None:
+        # Enable only for a deployment that declares balanced leading reasoning.
+        # Generic responses can contain literal XML and stay intact by default.
+        self.leading_reasoning = (
+            leading_reasoning
+            if leading_reasoning is not None
+            else prefilled_reasoning_from_env("OLLAMA_LEADING_REASONING")
+        )
         # Set for models whose chat template prefills <think>, so replies arrive
         # as "...</think>answer" without the opening tag.
         self.prefilled_reasoning = (
@@ -158,7 +166,9 @@ class OllamaProvider(LLMProvider):
                 result = json.loads(response.read().decode("utf-8"))
 
             content = strip_reasoning(
-                result.get("message", {}).get("content", ""), prefilled=self.prefilled_reasoning
+                result.get("message", {}).get("content", ""),
+                leading=self.leading_reasoning,
+                prefilled=self.prefilled_reasoning
             )
 
             tool_calls = None
