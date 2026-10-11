@@ -12,7 +12,9 @@ const isScriptBoundary = (operation, root) => operation.kind === 'copy-file'
 
 // A nested package owns its own module scope. Symlinks and uncertain trees are
 // preserved conservatively rather than followed while deciding scope changes.
-function scopedJavaScriptFiles(directory, { nested = false, depth = 0 } = {}) {
+// Native .ts and transpiled JSX/TSX inherit package type too. Explicit
+// .mjs/.cjs/.mts/.cts formats remain independent of this boundary.
+function scopedScriptFiles(directory, { nested = false, depth = 0 } = {}) {
   if (depth > 40) throw new Error('OpenCode scripts tree exceeds the safe inspection depth');
   const stat = fs.lstatSync(directory, { throwIfNoEntry: false });
   if (!stat) return [];
@@ -23,8 +25,8 @@ function scopedJavaScriptFiles(directory, { nested = false, depth = 0 } = {}) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const file = path.join(directory, entry.name);
     if (entry.isSymbolicLink()) throw new Error(`Unsafe OpenCode scripts symlink: ${file}`);
-    if (entry.isDirectory()) files.push(...scopedJavaScriptFiles(file, { nested: true, depth: depth + 1 }));
-    else if (entry.isFile() && entry.name.toLowerCase().endsWith('.js')) files.push(file);
+    if (entry.isDirectory()) files.push(...scopedScriptFiles(file, { nested: true, depth: depth + 1 }));
+    else if (entry.isFile() && /\.(?:js|jsx|ts|tsx)$/i.test(entry.name)) files.push(file);
     if (files.length > 12000) throw new Error('OpenCode scripts tree exceeds the safe inspection count');
   }
   return files;
@@ -49,7 +51,7 @@ function assertCommonJSMetadata(content, file) {
 function assertSelectedScriptScopes(plan, readFile, scriptsRoot) {
   const inspected = new Set();
   for (const operation of plan.operations) {
-    if (operation.kind !== 'copy-file' || !operation.destinationPath.endsWith('.js')) continue;
+    if (operation.kind !== 'copy-file' || !/\.(?:js|jsx|ts|tsx)$/i.test(operation.destinationPath)) continue;
     const relative = path.relative(scriptsRoot, operation.destinationPath);
     if (relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative)) continue;
     // Check every selected entry/helper, including nested library boundaries
@@ -92,7 +94,7 @@ function assertScriptBoundary(plan, { readFile, previousOperations = [], written
     .map(operation => [key(operation.destinationPath), operation]));
   const written = new Set([...writtenDestinations].map(key));
   const planned = new Map(plan.operations.map(operation => [key(operation.destinationPath), operation]));
-  for (const file of scopedJavaScriptFiles(path.dirname(marker))) {
+  for (const file of scopedScriptFiles(path.dirname(marker))) {
     const operation = previous.get(key(file));
     const bytes = readFile(file);
     const expected = written.has(key(file))
@@ -101,14 +103,14 @@ function assertScriptBoundary(plan, { readFile, previousOperations = [], written
     const expectedDigest = expected === null
       ? operation?.contentSha256 : crypto.createHash('sha256').update(expected).digest('hex');
     if (!expectedDigest || digest !== expectedDigest) {
-      throw new Error(`Refusing CommonJS runtime migration: unowned or edited JavaScript at ${file} would change module scope. Give user scripts their own package.json scope before retrying.`);
+      throw new Error(`Refusing CommonJS runtime migration: unowned or edited JavaScript/TypeScript at ${file} would change module scope. Give user scripts their own package.json scope before retrying.`);
     }
   }
 }
 
 function retainScriptBoundary(operation, targetRoot) {
   if (!isScriptBoundary(operation, targetRoot)) return false;
-  try { return scopedJavaScriptFiles(path.dirname(operation.destinationPath)).length > 0; }
+  try { return scopedScriptFiles(path.dirname(operation.destinationPath)).length > 0; }
   catch { return true; }
 }
 

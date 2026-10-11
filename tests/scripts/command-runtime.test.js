@@ -100,14 +100,15 @@ for (const [scope, bytes] of [
     assert.throws(() => previewInstallPlan(f.plan())); assert.deepStrictEqual(snapshot(f.dir), before);
   });
 }
-for (const userFile of ['user.js', 'lib/user.js', 'lib/skill-evolution/user.js', 'ci/user.js', 'lib/utils.js']) {
-  test(`refuses unowned JS ${userFile} without scope mutation`, f => {
+for (const userFile of ['user.js', 'lib/user.js', 'lib/skill-evolution/user.js', 'ci/user.js', 'lib/utils.js',
+  'user.ts', 'lib/user.ts', 'ci/user.ts', 'user.jsx', 'user.tsx']) {
+  test(`refuses unowned script ${userFile} without scope mutation`, f => {
     f.write(path.join(f.project, 'package.json'), '{"type":"module"}\n');
     const file = path.join(f.scripts, userFile); f.write(file, 'export const value = 42;\n');
-    assert.strictEqual(f.probe(file), '42'); const before = snapshot(f.dir);
+    if (userFile.endsWith('.js')) assert.strictEqual(f.probe(file), '42'); const before = snapshot(f.dir);
     const result = f.install(); assert.notStrictEqual(result.status, 0);
     assert.match(result.stderr + result.stdout, /unowned or edited JavaScript/);
-    assert.deepStrictEqual(snapshot(f.dir), before); assert.strictEqual(f.probe(file), '42');
+    assert.deepStrictEqual(snapshot(f.dir), before); if (userFile.endsWith('.js')) assert.strictEqual(f.probe(file), '42');
   });
 }
 for (const bytes of ['{ "type": "commonjs", "user": true }\n', '{"user":true}\n']) {
@@ -157,16 +158,18 @@ test('publication rechecks nested helper package conflict', f => {
   } }), /module boundary/);
   assert.ok(!fs.existsSync(f.marker));
 });
-test('uninstall retains owned boundary for newly added user JS until it is removed', f => {
+for (const extension of ['js', 'ts', 'jsx', 'tsx']) {
+test(`uninstall retains owned boundary for newly added user ${extension} until it is removed`, f => {
   f.write(path.join(f.project, 'package.json'), '{"type":"module"}\n');
-  f.ok(f.install()); const file = path.join(f.scripts, 'user.js'); f.write(file, 'module.exports = 47;\n');
+  f.ok(f.install()); const file = path.join(f.scripts, `user.${extension}`); f.write(file, 'module.exports = 47;\n');
   const partial = JSON.parse(f.uninstall().stdout);
   assert.strictEqual(partial.results[0].status, 'partial');
   assert.strictEqual(partial.summary.errorCount, 0);
   assert.ok(partial.results[0].retainedPaths.includes(f.marker));
-  assert.ok(fs.existsSync(f.marker)); assert.strictEqual(f.probe(file), '47');
+  assert.ok(fs.existsSync(f.marker)); if (extension === 'js') assert.strictEqual(f.probe(file), '47');
   fs.unlinkSync(file); f.ok(f.uninstall()); assert.ok(!fs.existsSync(f.marker)); assert.ok(!fs.existsSync(f.statePath));
 });
+}
 for (const scope of ['lib/package.json', 'lib/skill-evolution/package.json', 'ci/package.json']) {
   test(`existing CommonJS parent still rejects incompatible selected ${scope}`, f => {
     f.write(f.marker, '{"type":"commonjs","user":true}\n');
@@ -191,6 +194,17 @@ for (const scope of ['package.json', 'lib/package.json']) {
   test(`non-file ${scope} refuses before mutation`, f => {
     fs.mkdirSync(path.join(f.scripts, scope), { recursive: true }); const before = snapshot(f.dir);
     assert.notStrictEqual(f.install().status, 0); assert.deepStrictEqual(snapshot(f.dir), before);
+  });
+}
+for (const extension of ['mjs', 'cjs', 'mts', 'cts']) {
+  test(`explicit user ${extension} format remains independent of installed boundary`, f => {
+    f.write(path.join(f.project, 'package.json'), '{"type":"module"}\n');
+    const file = path.join(f.scripts, `user.${extension}`);
+    const bytes = extension.startsWith('m') ? 'export const value = 48;\n' : 'module.exports = 48;\n';
+    f.write(file, bytes); f.ok(f.install()); f.health();
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), bytes);
+    f.ok(f.uninstall()); assert.ok(!fs.existsSync(f.marker));
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), bytes);
   });
 }
 console.log(`Passed: ${passed}`); console.log(`Failed: ${failed}`); process.exitCode = failed ? 1 : 0;
