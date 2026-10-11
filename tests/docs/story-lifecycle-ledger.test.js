@@ -79,6 +79,29 @@ function symlink(target, file, type) {
 const read = (root, rel) => fs.readFileSync(path.join(root, '.stories', rel), 'utf8');
 const storyFiles = (root) => fs.readdirSync(path.join(root, '.stories')).filter((f) => /-\d+\.md$/.test(f)).sort();
 
+const LOCK_DENIAL_MARKER = 'FOREIGN_LOCK_CREATE_DENIED ';
+function windowsLockCreateDenied(result, lock, platform = process.platform) {
+  if (platform !== 'win32' || result.status !== 1) return false;
+  try {
+    const line = result.stderr.split('\n').find(text => text.startsWith(LOCK_DENIAL_MARKER));
+    if (!line) return false;
+    const denied = JSON.parse(line.slice(LOCK_DENIAL_MARKER.length));
+    return ['EPERM', 'EACCES', 'EBUSY'].includes(denied.code) && denied.syscall === 'open' && denied.path === lock &&
+      result.stderr.split('\n').some(text => /(?:EPERM|EACCES|EBUSY).*\b(?:open|lstat)\b/.test(text) && text.includes(`'${lock}'`));
+  } catch { return false; }
+}
+
+function assertRefusedLockWriter(root, ids, input) {
+  const filename = `${ids[0]}.md`;
+  assert.deepStrictEqual(storyFiles(root), [filename]);
+  assert.strictEqual(read(root, filename), JSON.parse(fs.readFileSync(input, 'utf8')).create[filename]);
+  assert.ok(!fs.readdirSync(path.join(root, '.stories')).some(name => name === '.lock' || name === '.txn'));
+  const state = run(root, ['status']);
+  assert.strictEqual(state.code, 0, state.err);
+  assert.strictEqual(state.out.recoveryPending, false);
+  assert.deepStrictEqual(state.out.drift, []);
+}
+
 function snapshot(dir) {
   if (!fs.existsSync(dir)) return null;
   return Object.fromEntries(fs.readdirSync(dir, { withFileTypes: true })
@@ -577,30 +600,29 @@ const write = fs.writeFileSync; fs.writeFileSync = function (p, ...a) { plant(p)
 
   ['release leaves a replacement lock owned by another writer intact', () => {
     const root = newRepo();
-    const { input } = createStories(root, ['Ours']);
+    const { ids, input } = createStories(root, ['Ours']);
     const lock = path.join(root, '.stories', '.lock');
     const preload = path.join(root, 'lock-owner-race.js');
     fs.writeFileSync(preload, `const fs = require('fs'); const original = fs.rmSync; let replaced = false;
-fs.rmSync = function (p, ...args) { const result = original.call(fs, p, ...args);
- if (!replaced && String(p).split(require('path').sep).join('/').endsWith('/.stories/.txn')) { replaced = true; fs.unlinkSync(${JSON.stringify(lock)});
-  fs.writeFileSync(${JSON.stringify(lock)}, JSON.stringify({pid:${process.pid},host:require('os').hostname(),at:'replacement'}), {flag:'wx'}); }
+fs.rmSync = function (p, ...args) { const existed = fs.existsSync(p); const result = original.call(fs, p, ...args);
+ if (existed && !replaced && String(p).split(require('path').sep).join('/').endsWith('/.stories/.txn')) { replaced = true; fs.unlinkSync(${JSON.stringify(lock)});
+  try { fs.writeFileSync(${JSON.stringify(lock)}, JSON.stringify({pid:${process.pid},host:require('os').hostname(),at:'replacement'}), {flag:'wx'}); }
+  catch (error) { process.stderr.write(${JSON.stringify(LOCK_DENIAL_MARKER)} + JSON.stringify({code:error.code,syscall:error.syscall,path:error.path}) + '\\n'); throw error; } }
  return result; };`);
     const result = spawnSync(process.execPath, ['-r', preload, LEDGER, 'apply', '--input', input, '--root', root], { encoding: 'utf8' });
     // Some Windows Node versions prevent re-creating an open delete-pending
     // lock. The injected foreign writer is rejected before it can take ownership.
-    if (process.platform === 'win32' && result.status === 1 && /(?:EPERM|EACCES|EBUSY).*open[^\n]*\.lock/.test(result.stderr)) {
-      assert.strictEqual(storyFiles(root).length, 1, 'original publication completed');
-      assert.ok(read(root, storyFiles(root)[0]).includes('Ours'));
-      assert.ok(!fs.existsSync(lock), 'process exit releases the old delete-pending lock');
-      return;
-    }
+    if (windowsLockCreateDenied(result, lock)) return assertRefusedLockWriter(root, ids, input);
     assert.strictEqual(result.status, 0, result.stderr);
-    assert.ok(fs.readFileSync(lock, 'utf8').includes('replacement'));
+    const replacement = fs.readFileSync(lock, 'utf8');
+    assert.deepStrictEqual(JSON.parse(replacement), { pid: process.pid, host: os.hostname(), at: 'replacement' });
+    assert.strictEqual(run(root, ['status']).code, 0);
+    assert.strictEqual(fs.readFileSync(lock, 'utf8'), replacement);
   }],
 
   ['lock release survives inode reuse after an early descriptor close', () => {
     const root = newRepo();
-    const { input } = createStories(root, ['Inode owner']);
+    const { ids, input } = createStories(root, ['Inode owner']);
     const lock = path.join(root, '.stories', '.lock');
     const preload = path.join(root, 'lock-inode-reuse.js');
     fs.writeFileSync(preload, `const fs = require('fs'); let fd, oldStat, closed = false, replaced = false;
@@ -612,10 +634,11 @@ const open = fs.openSync; fs.openSync = function (p, flags, ...a) {
 const close = fs.closeSync; fs.closeSync = function (value) {
  if (value === fd) closed = true; return close.call(fs, value); };
 const remove = fs.rmSync; fs.rmSync = function (p, ...a) {
- const result = remove.call(fs, p, ...a);
- if (!replaced && String(p).split(require('path').sep).join('/').endsWith('/.stories/.txn')) {
+ const existed = fs.existsSync(p); const result = remove.call(fs, p, ...a);
+ if (existed && !replaced && String(p).split(require('path').sep).join('/').endsWith('/.stories/.txn')) {
   replaced = true; fs.unlinkSync(${JSON.stringify(lock)});
-  fs.writeFileSync(${JSON.stringify(lock)}, JSON.stringify({ pid: ${process.pid}, host: require('os').hostname(), at: 'replacement' }), { flag: 'wx' });
+  try { fs.writeFileSync(${JSON.stringify(lock)}, JSON.stringify({ pid: ${process.pid}, host: require('os').hostname(), at: 'replacement' }), { flag: 'wx' }); }
+  catch (error) { process.stderr.write(${JSON.stringify(LOCK_DENIAL_MARKER)} + JSON.stringify({code:error.code,syscall:error.syscall,path:error.path}) + '\\n'); throw error; }
  } return result; };
 const stat = fs.lstatSync; fs.lstatSync = function (p, ...a) {
  const result = stat.call(fs, p, ...a);
@@ -624,14 +647,48 @@ const stat = fs.lstatSync; fs.lstatSync = function (p, ...a) {
     const result = spawnSync(process.execPath, ['-r', preload, LEDGER, 'apply', '--input', input, '--root', root], { encoding: 'utf8' });
     // Some Windows Node versions prevent re-creating an open delete-pending
     // lock. The injected foreign writer is rejected before it can take ownership.
-    if (process.platform === 'win32' && result.status === 1 && /(?:EPERM|EACCES|EBUSY).*open[^\n]*\.lock/.test(result.stderr)) {
-      assert.strictEqual(storyFiles(root).length, 1, 'original publication completed');
-      assert.ok(read(root, storyFiles(root)[0]).includes('Inode owner'));
-      assert.ok(!fs.existsSync(lock), 'process exit releases the old delete-pending lock');
-      return;
-    }
+    if (windowsLockCreateDenied(result, lock)) return assertRefusedLockWriter(root, ids, input);
     assert.strictEqual(result.status, 0, result.stderr);
-    assert.ok(fs.readFileSync(lock, 'utf8').includes('replacement'));
+    const replacement = fs.readFileSync(lock, 'utf8');
+    assert.deepStrictEqual(JSON.parse(replacement), { pid: process.pid, host: os.hostname(), at: 'replacement' });
+    assert.strictEqual(run(root, ['status']).code, 0);
+    assert.strictEqual(fs.readFileSync(lock, 'utf8'), replacement);
+  }],
+
+  ['delete-pending cleanup may mask a proven foreign-open denial without losing the owner close', () => {
+    const root = newRepo();
+    const { ids, input } = createStories(root, ['Committed owner']);
+    const lock = path.join(root, '.stories', '.lock');
+    const proof = path.join(root, 'owner-close.json');
+    const preload = path.join(root, 'delete-pending.js');
+    fs.writeFileSync(preload, `const fs = require('fs'); let owner, pending = false, ownerClosed = false;
+const lock = ${JSON.stringify(lock)};
+const error = syscall => Object.assign(new Error("EPERM: operation not permitted, " + syscall + " '" + lock + "'"), {code:'EPERM',syscall,path:lock});
+const open = fs.openSync; fs.openSync = function (p, flags, ...args) {
+ const fd = open.call(fs, p, flags, ...args); if (p === lock && (flags & fs.constants.O_EXCL)) owner = fd; return fd; };
+const remove = fs.rmSync; fs.rmSync = function (p, ...args) {
+ const existed = fs.existsSync(p); const result = remove.call(fs, p, ...args);
+ if (existed && !pending && String(p).split(require('path').sep).join('/').endsWith('/.stories/.txn')) {
+  fs.unlinkSync(lock); pending = true; const denied = error('open');
+  process.stderr.write(${JSON.stringify(LOCK_DENIAL_MARKER)} + JSON.stringify(denied) + '\\n'); throw denied;
+ } return result; };
+const stat = fs.lstatSync; fs.lstatSync = function (p, ...args) { if (pending && p === lock) throw error('lstat'); return stat.call(fs, p, ...args); };
+const close = fs.closeSync; fs.closeSync = function (fd) {
+ const result = close.call(fs, fd); if (pending && fd === owner && !ownerClosed) {
+  ownerClosed = true;
+  let code; try { fs.fstatSync(fd); } catch (closed) { code = closed.code; }
+  fs.writeFileSync(${JSON.stringify(proof)}, JSON.stringify({closed:code}));
+ } return result; };`);
+    const result = spawnSync(process.execPath, ['-r', preload, LEDGER, 'apply', '--input', input, '--root', root], { encoding: 'utf8' });
+    assert.strictEqual(result.status, 1, result.stderr);
+    assert.match(result.stderr, /EPERM: operation not permitted, lstat/);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(proof, 'utf8')), { closed: 'EBADF' });
+    assert.strictEqual(windowsLockCreateDenied(result, lock, 'win32'), true, result.stderr);
+    assert.strictEqual(windowsLockCreateDenied(result, lock, 'linux'), false);
+    assert.strictEqual(windowsLockCreateDenied(result, `${lock}.break`, 'win32'), false);
+    const unmarked = { ...result, stderr: result.stderr.split('\n').filter(line => !line.startsWith(LOCK_DENIAL_MARKER)).join('\n') };
+    assert.strictEqual(windowsLockCreateDenied(unmarked, lock, 'win32'), false);
+    assertRefusedLockWriter(root, ids, input);
   }],
 
   ['recovery can itself be interrupted and retried without losing rollback ownership', () => {
