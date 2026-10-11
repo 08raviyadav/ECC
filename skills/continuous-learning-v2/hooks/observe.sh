@@ -586,22 +586,21 @@ touch "$ACTIVITY_FILE" 2>/dev/null || true
 should_signal=0
 
 _clv2_bump_signal_counter() {
+  counter=0
   if [ -f "$SIGNAL_COUNTER_FILE" ]; then
-    counter=$(cat "$SIGNAL_COUNTER_FILE" 2>/dev/null || echo 0)
-    # Guard against a corrupt counter file: a non-integer value would abort the
-    # hook under `set -e` at the arithmetic below.
-    case "$counter" in
-      ''|*[!0-9]*) counter=0 ;;
-    esac
-    counter=$((counter + 1))
-    if [ "$counter" -ge "$SIGNAL_EVERY_N" ]; then
-      should_signal=1
-      counter=0
-    fi
-    echo "$counter" > "$SIGNAL_COUNTER_FILE"
-  else
-    echo "1" > "$SIGNAL_COUNTER_FILE"
+    counter=$(head -c 20 "$SIGNAL_COUNTER_FILE" 2>/dev/null || echo 0)
   fi
+  # Bound parsing and avoid shell arithmetic overflow on corrupt local state.
+  case "$counter" in
+    ''|*[!0-9]*) counter=0 ;;
+  esac
+  if [ "${#counter}" -gt 18 ]; then counter=0; fi
+  counter=$((10#$counter + 1))
+  if [ "$counter" -ge "$SIGNAL_EVERY_N" ]; then
+    should_signal=1
+    counter=0
+  fi
+  echo "$counter" > "$SIGNAL_COUNTER_FILE"
 }
 
 if command -v flock >/dev/null 2>&1 && exec 8>"$SIGNAL_COUNTER_LOCK" 2>/dev/null; then
@@ -655,14 +654,14 @@ try:
                 time.sleep(0.02)
         try:
             with open(sys.argv[2], encoding="ascii") as source:
-                value = source.read().strip()
-            counter = int(value) if value and value.isascii() and value.isdigit() else 0
-            counter += 1
-            signal = int(counter >= int(sys.argv[3]))
-            if signal:
-                counter = 0
+                value = source.read(20).strip()
         except FileNotFoundError:
-            counter, signal = 1, 0
+            value = ""
+        counter = int(value) if 0 < len(value) <= 18 and value.isascii() and value.isdigit() else 0
+        counter += 1
+        signal = int(counter >= int(sys.argv[3]))
+        if signal:
+            counter = 0
         with open(sys.argv[2], "w", encoding="ascii") as target:
             target.write(str(counter) + "\n")
         print(signal)
