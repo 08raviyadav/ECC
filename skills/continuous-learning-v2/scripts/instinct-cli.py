@@ -551,7 +551,8 @@ def parse_instinct_file(content: str) -> list[dict]:
                     value = value[1:-1].replace("''", "'")
                 if key == 'confidence':
                     try:
-                        current[key] = float(value)
+                        confidence = float(value)
+                        current[key] = confidence if 0.0 <= confidence <= 1.0 else 0.5
                     except ValueError:
                         current[key] = 0.5  # default on malformed confidence
                 else:

@@ -252,6 +252,18 @@ Body.
     assert result[0]["confidence"] == pytest.approx(0.42)
 
 
+@pytest.mark.parametrize("confidence", ["nan", "inf", "-inf", "1e309", "-0.1", "1.1", "invalid"])
+def test_parse_invalid_confidence_uses_default(confidence):
+    content = SAMPLE_INSTINCT_YAML.replace("confidence: 0.8", f"confidence: {confidence}")
+    assert parse_instinct_file(content)[0]["confidence"] == 0.5
+
+
+@pytest.mark.parametrize("confidence", [0.0, 0.42, 1.0])
+def test_parse_confidence_preserves_valid_range(confidence):
+    content = SAMPLE_INSTINCT_YAML.replace("confidence: 0.8", f"confidence: {confidence}")
+    assert parse_instinct_file(content)[0]["confidence"] == confidence
+
+
 def test_parse_trigger_strips_quotes():
     content = """\
 ---
@@ -669,6 +681,17 @@ def test_cmd_status_with_instincts(patch_globals, monkeypatch, capsys):
     assert "Global instincts:  1" in out
     assert "PROJECT-SCOPED" in out
     assert "GLOBAL" in out
+
+
+@pytest.mark.parametrize("confidence", ["inf", "-inf", "nan"])
+def test_cmd_status_handles_nonfinite_confidence(patch_globals, monkeypatch, capsys, confidence):
+    project = _make_project(patch_globals)
+    monkeypatch.setattr(_mod, "detect_project", lambda: project)
+    content = SAMPLE_INSTINCT_YAML.replace("confidence: 0.8", f"confidence: {confidence}")
+    (project["instincts_personal"] / "nonfinite.yaml").write_text(content, encoding="utf-8")
+
+    assert cmd_status(SimpleNamespace()) == 0
+    assert "50%" in capsys.readouterr().out
 
 
 def test_confidence_bar_uses_unicode_when_supported():
