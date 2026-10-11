@@ -37,9 +37,12 @@ cryptographic signature or proof of who ran the experiment.
 grader to score `reference` 1 and the start workspace, the `naive` trap and every
 `decoy-*` overlay below 1. A decoy has the right shape and the wrong content, so
 a grader that checks only the form fails the check. Both runners count only valid
-trials: an attempt that ended in a provider error or timeout stays in
-`results.jsonl` with its own transcript, is reported apart, and is retried on
-resume. A gated trial whose hook never ran stops the run and is not recorded.
+trials: authentication-related provider errors stop the run before the attempt
+is appended to `results.jsonl`. The transcript is retained, but there is no
+attempt record. Other provider-error or timeout attempts stay in `results.jsonl`
+with their own transcripts, are reported apart, and are retried on resume.
+A gated trial whose hook never ran also stops the run without a `results.jsonl`
+record.
 
 ```bash
 node docker/gateguard-effectiveness/run-intent.js --check-graders

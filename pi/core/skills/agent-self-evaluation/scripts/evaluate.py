@@ -370,7 +370,8 @@ def _read_file_or_text(path: Optional[str], *, required: bool = False) -> Option
         with open(path) as f:
             return f.read()
     except OSError as error:
-        if error.errno not in (errno.ENOENT, errno.ENAMETOOLONG):
+        windows_inline_task = error.errno == errno.EINVAL and sys.platform == "win32" and not required
+        if error.errno not in (errno.ENOENT, errno.ENAMETOOLONG) and not windows_inline_task:
             raise
         if required:
             print(f"Error: output file '{path}' not found", file=sys.stderr)
