@@ -320,7 +320,7 @@ const tests = [
     const preload = path.join(root, 'race.js');
     fs.writeFileSync(preload, `const fs = require('fs'); const orig = fs.openSync; let raced = false;
 fs.openSync = function (p, ...a) { const r = orig.call(fs, p, ...a);
-  if (!raced && String(p).endsWith('.lock') && a[0] === fs.constants.O_NOFOLLOW) { raced = true; fs.unlinkSync(p);
+  if (!raced && String(p).endsWith('.lock') && a[0] === (fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0))) { raced = true; fs.unlinkSync(p);
     fs.writeFileSync(p, JSON.stringify({ pid: ${process.pid}, host: require('os').hostname(), at: 'live' }), { flag: 'wx' }); }
   return r; };`);
     const r = spawnSync(process.execPath, ['-r', preload, LEDGER, 'allocate', '--epic', 'auth-flow', '--root', root, '--wait-ms', '200'], { encoding: 'utf8' });
