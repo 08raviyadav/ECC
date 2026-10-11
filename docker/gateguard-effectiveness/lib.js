@@ -374,8 +374,20 @@ function pairedComparison(rows, reference, arm, { rounds = 4000, seed = 0x9e3779
   };
 }
 
+/** A trial counts only when the provider, the clock and the judge all completed. */
+function isValidTrial(row) {
+  return !row.providerError && !row.timedOut && !row.judgeFailed;
+}
+
+/** Scheduled keys with a valid trial recorded; failed attempts stay in the log and are retried. */
+function completedTrialKeys(rows) {
+  return new Set(rows.filter(isValidTrial).map(row => row.key));
+}
+
+// Totals cover valid trials only; provider failures and timeouts are counted apart.
 function armSummary(rows, arm) {
-  const own = rows.filter(row => row.arm === arm);
+  const attempts = rows.filter(row => row.arm === arm);
+  const own = attempts.filter(isValidTrial);
   const passes = own.filter(row => row.passed).length;
   return {
     arm,
@@ -390,12 +402,12 @@ function armSummary(rows, arm) {
     medianWallMs: median(own.map(row => row.wallMs)),
     medianDenials: median(own.map(row => row.gateDenials)),
     meanEvidenceRecall: own.length ? own.reduce((sum, row) => sum + row.evidenceRecall, 0) / own.length : null,
-    providerErrors: own.filter(row => row.providerError || row.timedOut).length
+    providerErrors: attempts.filter(row => row.providerError || row.timedOut).length
   };
 }
 
 function summarize(rows, arms, reference = 'gate') {
-  const valid = rows.filter(row => !row.providerError && !row.timedOut);
+  const valid = rows.filter(isValidTrial);
   const scenarios = [...new Set(valid.map(row => row.scenario))].sort();
   return {
     arms: arms.map(arm => armSummary(rows, arm)),
@@ -451,6 +463,8 @@ module.exports = {
   runTrial,
   binomialTwoSided,
   pairedComparison,
+  isValidTrial,
+  completedTrialKeys,
   summarize,
   renderMarkdown
 };
