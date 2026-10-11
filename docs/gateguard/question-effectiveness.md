@@ -104,10 +104,12 @@ transcript and decision metrics from the hook; the questions asked; how many of
 the scenario's `evidence` patterns the agent stated in its own text (for
 example the three importers); turns, tokens, cost and wall time as reported by
 Claude; and provider errors or timeouts. The full transcript of each attempt is
-kept in `transcripts/`. An attempt that ends in a provider error or timeout
-stays in `results.jsonl` but is not a trial: summaries count valid trials only,
+kept in `transcripts/`. An authentication-related provider error stops the run
+before the attempt is appended to `results.jsonl`; its transcript is retained,
+but there is no attempt record. Other provider-error or timeout attempts
+stay in `results.jsonl` but are not trials: summaries count valid trials only,
 report the failed attempts apart, and a resumed run retries their keys. A gated
-trial whose hook never ran is not recorded at all; the run stops instead.
+trial whose hook never ran also has no `results.jsonl` record; the run stops instead.
 
 ## Analysis
 
