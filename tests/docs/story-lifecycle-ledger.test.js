@@ -83,7 +83,12 @@ function snapshot(dir) {
   if (!fs.existsSync(dir)) return null;
   return Object.fromEntries(fs.readdirSync(dir).sort().map((name) => {
     const file = path.join(dir, name);
-    return [name, fs.lstatSync(file).isDirectory() ? snapshot(file) : fs.readFileSync(file, 'base64')];
+    if (fs.lstatSync(file).isDirectory()) return [name, snapshot(file)];
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      assert.ok(fs.fstatSync(fd).isFile(), 'snapshot requires a regular file');
+      return [name, fs.readFileSync(fd, 'base64')];
+    } finally { fs.closeSync(fd); }
   }));
 }
 
