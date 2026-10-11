@@ -2117,6 +2117,7 @@ function creditNote(match, filePath) {
 const MISS_DETAIL_MAX_CHARS = 60;
 const MISS_REASON_TEXT = Object.freeze({
   'same-batch': 'it was sent in the same batch as this call, so its result was not seen yet',
+  lookup: 'it only looked this file up by its own name, so it found nothing that uses it',
   excluded: 'its filters exclude this file',
   'out-of-scope': 'its search path does not contain this file',
   'stdin-only': 'it searched piped input, not the tree',
