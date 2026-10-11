@@ -25,6 +25,7 @@ from llm.core.types import (
     Role,
     ToolCall,
 )
+from llm.providers.model_config import read_model_env
 from llm.providers.reasoning import prefilled_reasoning_from_env, strip_reasoning
 
 logger = logging.getLogger(__name__)
@@ -75,7 +76,7 @@ class OllamaProvider(LLMProvider):
             else prefilled_reasoning_from_env("OLLAMA_PREFILLED_REASONING")
         )
         self.base_url = base_url or os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-        self.default_model = default_model or os.environ.get("OLLAMA_MODEL", "llama3.2")
+        self.default_model = default_model or read_model_env("OLLAMA_MODEL") or "llama3.2"
         self._models = [
             ModelInfo(
                 name="llama3.2",

@@ -75,6 +75,38 @@ def _openai_response(**overrides) -> SimpleNamespace:
     return SimpleNamespace(**defaults)
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("default_model", "request_model", "expected_model"),
+    [
+        (None, None, "gpt-4o-mini"),
+        (None, "gpt-4o", "gpt-4o"),
+        ("gpt-4o", None, "gpt-4o"),
+        ("gpt-4o", "gpt-4-turbo", "gpt-4-turbo"),
+    ],
+)
+def test_openai_generate_respects_configured_default_and_request_model(
+    default_model: str | None, request_model: str | None, expected_model: str
+) -> None:
+    provider_options = {"api_key": "test"}
+    if default_model is not None:
+        provider_options["default_model"] = default_model
+    provider = OpenAIProvider(**provider_options)
+    client = _OpenAIClient()
+    provider.client = client
+    expected_default = default_model or "gpt-4o-mini"
+
+    assert provider.get_default_model() == expected_default
+
+    provider.generate(
+        LLMInput(messages=[Message(role=Role.USER, content="hi")], model=request_model)
+    )
+
+    assert client.completions.params is not None
+    assert client.completions.params["model"] == expected_model
+    assert provider.get_default_model() == expected_default
+
+
 def test_openai_provider_serializes_tools_for_chat_completions():
     provider = OpenAIProvider(api_key="test")
     client = _OpenAIClient()
