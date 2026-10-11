@@ -83,7 +83,8 @@ function parseVersionNumber(fileName) {
     return null;
   }
 
-  return Number(match[1]);
+  const version = Number(match[1]);
+  return Number.isSafeInteger(version) && version >= 1 ? version : null;
 }
 
 function listVersions(skillPath) {
@@ -170,16 +171,19 @@ function getEvolutionLog(skillPath, logType) {
 
 function createVersion(skillPath, options = {}) {
   const skillFilePath = ensureSkillExists(skillPath);
-  ensureSkillVersioning(skillPath);
 
   const versions = listVersions(skillPath);
   const versionsDir = getVersionsDir(skillPath);
-  const occupiedPaths = new Set(fs.readdirSync(versionsDir));
+  const occupiedPaths = new Set(fs.existsSync(versionsDir) ? fs.readdirSync(versionsDir) : []);
   let nextVersion = versions.length === 0 ? 1 : versions[versions.length - 1].version + 1;
   // Listing excludes non-files, but their paths remain user-owned and occupied.
-  while (occupiedPaths.has(`v${nextVersion}.md`)) {
+  while (Number.isSafeInteger(nextVersion) && occupiedPaths.has(`v${nextVersion}.md`)) {
     nextVersion += 1;
   }
+  if (!Number.isSafeInteger(nextVersion)) {
+    throw new Error('Skill snapshot version range is exhausted; existing snapshots were preserved');
+  }
+  ensureSkillVersioning(skillPath);
   const snapshotPath = path.join(versionsDir, `v${nextVersion}.md`);
   const skillContent = fs.readFileSync(skillFilePath, 'utf8');
   const createdAt = options.timestamp || new Date().toISOString();
