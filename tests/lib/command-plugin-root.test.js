@@ -5,6 +5,7 @@ const path = require('path');
 const os = require('os');
 const assert = require('assert');
 const { spawnSync } = require('child_process');
+const { resolveWindowsBashCandidates } = require('../../scripts/lib/windows-bash');
 const { INLINE_RESOLVE } = require('../../scripts/lib/resolve-ecc-root');
 
 // Sentinel ECC skill that resolveEccRoot() requires alongside the script tree
@@ -115,7 +116,10 @@ for (const name of ['auto-update', 'instinct-status', 'skill-health', 'skill-hos
         const selected = { ...process.env, HOME: temp, USERPROFILE: temp, CLAUDE_CONFIG_DIR: root };
         delete selected.CLAUDE_PLUGIN_ROOT;
         for (const env of [selected, { ...selected, CLAUDE_PLUGIN_ROOT: root }]) {
-          const result = spawnSync('bash', ['-s'],
+          const [bash] = resolveWindowsBashCandidates(['bash.exe', 'bash'], { env });
+          const shell = process.platform === 'win32' ? bash : 'bash';
+          assert.ok(shell, 'A native Git Bash executable is required');
+          const result = spawnSync(shell, ['-s'],
             { input: assignment + '\nprintf "%s" "$ECC_ROOT"\n', env, cwd: temp, encoding: 'utf8' });
           assert.strictEqual(result.status, 0, result.stderr);
           assert.strictEqual(result.stderr, '');

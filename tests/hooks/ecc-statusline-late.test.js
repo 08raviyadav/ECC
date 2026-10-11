@@ -6,9 +6,13 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const test = require('node:test');
+const { resolveWindowsBashCandidates } = require('../../scripts/lib/windows-bash');
 const { buildUsageLines } = require('../../scripts/hooks/ecc-statusline');
 const { buildUsageLine } = require('../../scripts/lib/statusline-render');
-const shellQuote = value => "'" + value.replace(/'/g, "'\\''") + "'";
+const shellQuote = value => {
+  const portable = process.platform === 'win32' ? value.split('\\').join('/') : value;
+  return "'" + portable.replace(/'/g, "'\\''") + "'";
+};
 const repoRoot = path.resolve(__dirname, '../..');
 // eslint-disable-next-line no-control-regex -- Statusline ANSI output is the fixture boundary.
 const stripAnsi = value => value.replace(/\x1b\[[0-9;]*m/g, '');
@@ -32,7 +36,9 @@ function registeredDisplay(t, payload, options = {}, bridge) {
   const env = { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: configDir, TMPDIR: temporaryDir, TEMP: temporaryDir, TMP: temporaryDir,
     ECC_STATUSLINE_USAGE: '1', ECC_STATUSLINE_COMPACT: '0', ECC_BAR_GLYPHS: 'ascii', ...options };
   if (env.ECC_STATUSLINE_USAGE === undefined) delete env.ECC_STATUSLINE_USAGE;
-  const result = spawnSync(process.platform === 'win32' ? 'bash' : '/bin/sh', ['-c', settings.statusLine.command], {
+  const shell = process.platform === 'win32' ? resolveWindowsBashCandidates(['bash.exe', 'bash'], { env })[0] : '/bin/sh';
+  assert.ok(shell, 'A native Git Bash executable is required for the Windows registration check');
+  const result = spawnSync(shell, ['-c', settings.statusLine.command], {
     input: JSON.stringify(payload), encoding: 'utf8', env, timeout: 5000, cwd: home,
   });
   assert.equal(result.status, 0, result.stderr);
