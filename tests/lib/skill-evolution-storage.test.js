@@ -162,7 +162,7 @@ test('rollback exclusive publication failure preserves live bytes and permits a 
   const writeFileSync = fs.writeFileSync;
   const injectedError = Object.assign(new Error('Injected snapshot publication failure'), { code: 'EIO' });
   fs.writeFileSync = (file, ...args) => {
-    if (file === path.join(versionsDir, 'v2.md') && args[1]?.flag === 'wx') throw injectedError;
+    if (typeof file === 'number' && args[0] === '# Original\n') throw injectedError;
     return writeFileSync(file, ...args);
   };
   try {
@@ -179,6 +179,137 @@ test('rollback exclusive publication failure preserves live bytes and permits a 
   assert.equal(fs.readFileSync(restored.path, 'utf8'), '# Original\n');
   assert.equal(fs.readFileSync(restored.path, 'utf8'), fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'));
   assert.equal(versioning.getEvolutionLog(skillDir, 'amendments').at(-1).event, 'rollback');
+});
+
+test('failed live rollback write preserves version and applied history, then retries without a duplicate', fixture => {
+  const { root, skillDir, versionsDir } = fixture;
+  versioning.createVersion(skillDir);
+  fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Unsnapshotted work\n');
+  const logPath = versioning.getEvolutionLogPath(skillDir, 'amendments');
+  const priorLog = fs.readFileSync(logPath, 'utf8');
+  const writeFileSync = fs.writeFileSync;
+  const injectedError = Object.assign(new Error('Injected live write failure'), { code: 'EACCES' });
+  fs.writeFileSync = (file, ...args) => {
+    if (file === path.join(skillDir, 'SKILL.md')) throw injectedError;
+    return writeFileSync(file, ...args);
+  };
+  try {
+    assert.throws(() => versioning.rollbackTo(skillDir, 1), error => error === injectedError);
+  } finally {
+    fs.writeFileSync = writeFileSync;
+  }
+  assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), '# Unsnapshotted work\n');
+  assert.deepEqual(fs.readdirSync(versionsDir), ['v1.md']);
+  assert.equal(versioning.getCurrentVersion(skillDir), 1);
+  assert.equal(fs.readFileSync(logPath, 'utf8'), priorLog);
+  const report = health.collectSkillHealth({ skillsRoot: path.join(root, 'skills'), homeDir: root });
+  assert.equal(report.skills.find(skill => skill.skill_id === 'demo').current_version, 'v1');
+  const restored = versioning.rollbackTo(skillDir, 1);
+  assert.equal(restored.version, 2);
+  assert.equal(fs.readFileSync(restored.path, 'utf8'), fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'));
+  assert.equal(versioning.getEvolutionLog(skillDir, 'amendments').filter(row => row.event === 'rollback').length, 1);
+});
+
+test('failed rollback preserves a foreign snapshot replacement and both error details', fixture => {
+  const { skillDir, versionsDir } = fixture;
+  versioning.createVersion(skillDir);
+  const live = path.join(skillDir, 'SKILL.md');
+  fs.writeFileSync(live, '# Unsnapshotted work\n');
+  const target = path.join(versionsDir, 'v2.md');
+  const writeFileSync = fs.writeFileSync;
+  const primary = Object.assign(new Error('Injected live refusal'), { code: 'EACCES' });
+  fs.writeFileSync = (file, ...args) => {
+    if (file === live) {
+      fs.renameSync(target, path.join(versionsDir, 'owned-attempt.saved'));
+      writeFileSync(target, '# Foreign snapshot\n');
+      throw primary;
+    }
+    return writeFileSync(file, ...args);
+  };
+  try {
+    assert.throws(() => versioning.rollbackTo(skillDir, 1), error =>
+      error.primaryError === primary && /changed ownership/.test(error.recoveryError.message) && /recovery is pending/.test(error.message));
+  } finally {
+    fs.writeFileSync = writeFileSync;
+  }
+  assert.equal(fs.readFileSync(live, 'utf8'), '# Unsnapshotted work\n');
+  assert.equal(fs.readFileSync(target, 'utf8'), '# Foreign snapshot\n');
+  assert.equal(versioning.getEvolutionLog(skillDir, 'amendments').filter(row => row.event === 'rollback').length, 0);
+});
+
+test('descriptor metadata and final-link failures never expose an empty or incomplete version', fixture => {
+  const { skillDir, versionsDir } = fixture;
+  versioning.createVersion(skillDir);
+  fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Unsnapshotted work\n');
+  const logPath = versioning.getEvolutionLogPath(skillDir, 'amendments');
+  const priorLog = fs.readFileSync(logPath, 'utf8');
+  for (const operation of ['fstatSync', 'linkSync']) {
+    const original = fs[operation];
+    const injectedError = Object.assign(new Error(`Injected ${operation} failure`), { code: 'EIO' });
+    fs[operation] = () => { throw injectedError; };
+    try {
+      assert.throws(() => versioning.rollbackTo(skillDir, 1), error => error === injectedError || (error.primaryError === injectedError && /recovery is pending/.test(error.message)));
+    } finally {
+      fs[operation] = original;
+    }
+    assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), '# Unsnapshotted work\n');
+    assert.equal(fs.existsSync(path.join(versionsDir, 'v2.md')), false);
+    assert.deepEqual(versioning.listVersions(skillDir).map(row => row.version), [1]);
+    assert.equal(versioning.getCurrentVersion(skillDir), 1);
+    assert.equal(fs.readFileSync(logPath, 'utf8'), priorLog);
+  }
+  const restored = versioning.rollbackTo(skillDir, 1);
+  assert.equal(restored.version, 2);
+  assert.equal(fs.readFileSync(restored.path, 'utf8'), fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'));
+});
+
+test('exclusive snapshot publication preserves a path occupied after allocation', fixture => {
+  const { skillDir, versionsDir } = fixture;
+  versioning.createVersion(skillDir);
+  fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Unsnapshotted work\n');
+  const target = path.join(versionsDir, 'v2.md');
+  const linkSync = fs.linkSync;
+  fs.linkSync = (source, destination) => {
+    if (destination === target) fs.writeFileSync(target, '# Foreign snapshot\n', { flag: 'wx' });
+    return linkSync(source, destination);
+  };
+  try {
+    assert.throws(() => versioning.rollbackTo(skillDir, 1), error => error.code === 'EEXIST');
+  } finally {
+    fs.linkSync = linkSync;
+  }
+  assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), '# Unsnapshotted work\n');
+  assert.equal(fs.readFileSync(target, 'utf8'), '# Foreign snapshot\n');
+  assert.deepEqual(fs.readdirSync(versionsDir), ['v1.md', 'v2.md']);
+  assert.equal(versioning.getEvolutionLog(skillDir, 'amendments').filter(row => row.event === 'rollback').length, 0);
+});
+
+test('snapshot staging cleanup preserves foreign entries and permits a clean later retry', fixture => {
+  const { skillDir, versionsDir } = fixture;
+  versioning.createVersion(skillDir);
+  const live = path.join(skillDir, 'SKILL.md');
+  fs.writeFileSync(live, '# Unsnapshotted work\n');
+  const linkSync = fs.linkSync;
+  let foreignPath;
+  fs.linkSync = (source, destination) => {
+    foreignPath = path.join(path.dirname(source), 'foreign-owned.txt');
+    fs.writeFileSync(foreignPath, 'foreign work');
+    return linkSync(source, destination);
+  };
+  try {
+    assert.throws(() => versioning.rollbackTo(skillDir, 1), error => /recovery is pending/.test(error.message));
+  } finally {
+    fs.linkSync = linkSync;
+  }
+  assert.equal(fs.readFileSync(foreignPath, 'utf8'), 'foreign work');
+  assert.equal(fs.readFileSync(live, 'utf8'), '# Unsnapshotted work\n');
+  assert.equal(fs.existsSync(path.join(versionsDir, 'v2.md')), false);
+  assert.equal(versioning.getCurrentVersion(skillDir), 1);
+  assert.equal(versioning.getEvolutionLog(skillDir, 'amendments').filter(row => row.event === 'rollback').length, 0);
+  const restored = versioning.rollbackTo(skillDir, 1);
+  assert.equal(restored.version, 2);
+  assert.equal(fs.readFileSync(restored.path, 'utf8'), fs.readFileSync(live, 'utf8'));
+  assert.equal(fs.readFileSync(foreignPath, 'utf8'), 'foreign work');
 });
 
 test('successful rollback snapshots restored content and retains earlier targets for another rollback', fixture => {
