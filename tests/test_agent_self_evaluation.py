@@ -67,8 +67,9 @@ def test_task_can_still_be_read_from_file(evaluator: ModuleType, tmp_path: Path,
 
 def test_missing_output_file_still_fails(evaluator: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(sys, "stdin", io.StringIO("Task"))
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(SystemExit) as exc_info:
         evaluator._read_input(args(output=str(tmp_path / "missing.txt")))
+    assert exc_info.value.code == 1
     assert "not found" in capsys.readouterr().err
 
 
