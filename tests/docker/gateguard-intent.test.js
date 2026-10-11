@@ -170,10 +170,7 @@ test('every grader separates the start, the trap and a correct solution', () => 
   const workRoot = tempDir('gg-sound-');
   for (const scenario of intentEval.loadIntentScenarios()) {
     const { scores, sound } = intentEval.graderIsSound(scenario, workRoot);
-    assert.ok(
-      sound,
-      `${scenario.id}: start=${scores.workspace} trap=${scores.naive} reference=${scores.reference}`
-    );
+    assert.ok(sound, `${scenario.id}: ${intentEval.formatGraderScores(scores)}`);
   }
 });
 
@@ -183,7 +180,7 @@ test('the CSV grader rejects the right dialect around the wrong values', () => {
   try {
     const csv = intentEval.loadIntentScenarios().find(scenario => scenario.id === 'csv-export-delimiter');
     const decoys = fs.readdirSync(csv.root).filter(name => name.startsWith('decoy-')).sort();
-    assert.deepStrictEqual(decoys, ['decoy-constant', 'decoy-keys']);
+    assert.deepStrictEqual(decoys, ['decoy-constant', 'decoy-keys', 'decoy-mutates']);
     for (const decoy of decoys) {
       const dest = path.join(workRoot, decoy);
       lib.prepareWorkspace(csv, dest, decoy);
@@ -193,6 +190,7 @@ test('the CSV grader rejects the right dialect around the wrong values', () => {
     assert.ok(sound, JSON.stringify(scores));
     for (const decoy of decoys) assert.ok(scores[decoy] < 1, `graderIsSound grades ${decoy}: ${scores[decoy]}`);
   } finally { fs.rmSync(workRoot, { recursive: true, force: true }); }
+
 });
 
 test('a grader that passes one of its decoys is not sound', () => {
