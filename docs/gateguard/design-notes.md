@@ -208,7 +208,9 @@ their absolute path. A Windows-style path has no real location on a POSIX host
 The first matching class wins: instruction, test, prose, config, code (the
 fallback). Cursor `.mdc` rule files are instructions wherever they live. A
 basename starting with `.env` is config unless it has a code extension
-(`.env.example.ts` is source). Code targets ask the original four questions,
+(`.env.example.ts` is source). Code targets ask the original four questions
+(five with the opt-in
+[external-contract question](change-profile.md#external-contract-question)),
 narrowed by the change profile (see
 [Questions from the change profile](change-profile.md#questions-from-the-change-profile)); other
 classes get class-specific questions and a class-specific condensed hint.
