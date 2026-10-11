@@ -12,28 +12,30 @@ _TRUTHY = {"1", "true", "yes", "on"}
 
 
 def prefilled_reasoning_from_env(name: str) -> bool:
-    """Read a ``*_PREFILLED_REASONING`` flag from the environment."""
+    """Read an explicit reasoning-format flag from the environment."""
     return os.environ.get(name, "").strip().lower() in _TRUTHY
 
 
-def strip_reasoning(content: str, *, prefilled: bool = False) -> str:
+def strip_reasoning(
+    content: str, *, leading: bool = False, prefilled: bool = False
+) -> str:
     """Drop a leading reasoning block from model output.
 
-    Hosted APIs return reasoning in a separate field, but self-hosted reasoning
-    models (vLLM or llama.cpp without a reasoning parser, Ollama models without
-    a thinking template) put it in ``content``.
+    Some deployments put reasoning in ``content`` instead of a separate field.
+    This helper makes no assumptions about a hosted API or model name.
 
-    By default only a balanced block that opens the output is removed:
-    ``<think>...</think>answer``. Anything else is returned unchanged, so an
-    answer that merely mentions the tags (including a lone or reversed closing
-    tag) is never truncated, and neither is unterminated reasoning (for example
-    when ``max_tokens`` cut the model off before it reached an answer).
+    Content is preserved by default, including complete leading XML documents.
+    Enable ``leading=True`` only for a deployment whose declared format is
+    ``<think>...</think>answer``. Unterminated reasoning remains unchanged.
 
     ``prefilled=True`` is for deployments whose chat template prefills the
     opening tag in the generation prompt, so the model only ever emits
     ``...</think>answer``. Only enable it when the model is known to behave this
     way: everything up to the first closing tag is then treated as reasoning.
     """
+    if not leading and not prefilled:
+        return content
+
     stripped = content.lstrip()
     if stripped.startswith(THINK_OPEN):
         close = stripped.find(THINK_CLOSE, len(THINK_OPEN))

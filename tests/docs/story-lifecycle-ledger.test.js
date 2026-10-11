@@ -380,6 +380,22 @@ fs.readFileSync = function (p, ...a) { const r = orig.call(fs, p, ...a);
     }
   }],
 
+  ['allocation rejects unsafe existing numeric IDs instead of looping forever', () => {
+    const root = newRepo();
+    const registry = path.join(root, '.git', 'story-lifecycle', 'ids');
+    fs.mkdirSync(registry, { recursive: true });
+    for (const n of ['9007199254740992', '9007199254740991']) {
+      const marker = path.join(registry, `auth-flow-${n}`);
+      fs.writeFileSync(marker, '');
+      const result = spawnSync(process.execPath, [LEDGER, 'allocate', '--root', root,
+        '--epic', 'auth-flow', '--count', '2'], { encoding: 'utf8', timeout: 2000 });
+      assert.strictEqual(result.status, 2, result.stderr || result.error?.message);
+      assert.match(result.stderr, /safe integer/);
+      assert.deepStrictEqual(fs.readdirSync(registry), [`auth-flow-${n}`]);
+      fs.rmSync(marker);
+    }
+  }],
+
   ['ledger paths are confined to .stories/ file shapes', () => {
     const dir = path.join(os.tmpdir(), '.stories');
     for (const bad of ['../x-1.md', 'epics/../../x.md', 'Auth-1.md', 'a/b-1.md', 'epics/a.txt', 'sprints/sprint-0.md', '/abs-1.md']) {

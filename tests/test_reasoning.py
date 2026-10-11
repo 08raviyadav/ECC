@@ -9,6 +9,7 @@ import pytest
 from llm.core.interface import LLMProvider
 from llm.core.types import LLMInput, LLMOutput, Message, Role
 from llm.providers.astraflow import AstraflowProvider
+from llm.providers.atlas import AtlasProvider
 from llm.providers.ollama import OllamaProvider
 from llm.providers.openai import OpenAIProvider
 from llm.providers.reasoning import strip_reasoning
@@ -38,8 +39,8 @@ LITERAL_ANSWERS = [
         ("17 * 3 = 51.</think>51", "17 * 3 = 51.</think>51"),
     ],
 )
-def test_strip_reasoning_default(content: str, expected: str) -> None:
-    assert strip_reasoning(content) == expected
+def test_strip_reasoning_declared_leading(content: str, expected: str) -> None:
+    assert strip_reasoning(content, leading=True) == expected
 
 
 @pytest.mark.parametrize("content", LITERAL_ANSWERS)
@@ -54,11 +55,17 @@ def test_strip_reasoning_default_preserves_literal_tags(content: str) -> None:
         ('build the object\n</think>\n{"answer": 51}', '{"answer": 51}'),
         ("<think>17 * 3 = 51.</think>51", "51"),
         ("plain answer", "plain answer"),
-        ("Wrap it in <think> and </think> tags.", "Wrap it in <think> and </think> tags."),
+        (
+            "Wrap it in <think> and </think> tags.",
+            "Wrap it in <think> and </think> tags.",
+        ),
         ("17 * 3 = 51.</think>", ""),
         # A complete JSON answer is never reasoning plus a closing tag.
         ('{"closing":"</think>"}', '{"closing":"</think>"}'),
-        ('  {"closing":"</think>","opening":"<think>"}\n', '  {"closing":"</think>","opening":"<think>"}\n'),
+        (
+            '  {"closing":"</think>","opening":"<think>"}\n',
+            '  {"closing":"</think>","opening":"<think>"}\n',
+        ),
         ('["</think>", 1]', '["</think>", 1]'),
     ],
 )
@@ -82,18 +89,27 @@ def _openai_provider(content: str, **kwargs: Any) -> OpenAIProvider:
         usage=None,
     )
     client: Any = SimpleNamespace(
-        chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **params: response))
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **params: response)
+        )
     )
     provider.client = client
     return provider
 
 
 def _ask(provider: LLMProvider, **kwargs: Any) -> LLMOutput:
-    return provider.generate(LLMInput(messages=[Message(role=Role.USER, content="17*3?")], **kwargs))
+    return provider.generate(
+        LLMInput(messages=[Message(role=Role.USER, content="17*3?")], **kwargs)
+    )
 
 
 def test_openai_provider_strips_balanced_reasoning() -> None:
-    assert _ask(_openai_provider("<think>17 * 3 = 51.</think>51")).content == "51"
+    assert (
+        _ask(
+            _openai_provider("<think>17 * 3 = 51.</think>51", leading_reasoning=True)
+        ).content
+        == "51"
+    )
 
 
 @pytest.mark.parametrize("content", LITERAL_ANSWERS)
@@ -101,16 +117,28 @@ def test_openai_provider_keeps_literal_tags(content: str) -> None:
     assert _ask(_openai_provider(content)).content == content
 
 
-def test_openai_provider_close_only_needs_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_openai_provider_close_only_needs_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("OPENAI_PREFILLED_REASONING", raising=False)
-    assert _ask(_openai_provider("17 * 3 = 51.</think>51")).content == "17 * 3 = 51.</think>51"
-    assert _ask(_openai_provider("17 * 3 = 51.</think>51", prefilled_reasoning=True)).content == "51"
+    assert (
+        _ask(_openai_provider("17 * 3 = 51.</think>51")).content
+        == "17 * 3 = 51.</think>51"
+    )
+    assert (
+        _ask(
+            _openai_provider("17 * 3 = 51.</think>51", prefilled_reasoning=True)
+        ).content
+        == "51"
+    )
 
     monkeypatch.setenv("OPENAI_PREFILLED_REASONING", "true")
     assert _ask(_openai_provider("17 * 3 = 51.</think>51")).content == "51"
 
 
-def test_hosted_provider_never_strips_close_only(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_hosted_provider_never_strips_close_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("OPENAI_PREFILLED_REASONING", "true")
     provider = AstraflowProvider(api_key="test")
     message = SimpleNamespace(content='{"closing":"</think>"}', tool_calls=None)
@@ -120,7 +148,9 @@ def test_hosted_provider_never_strips_close_only(monkeypatch: pytest.MonkeyPatch
         usage=None,
     )
     client: Any = SimpleNamespace(
-        chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **params: response))
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **params: response)
+        )
     )
     provider.client = client
 
@@ -132,21 +162,29 @@ def _fake_ollama(monkeypatch: pytest.MonkeyPatch, content: str) -> list[dict[str
 
     def fake_urlopen(request: urllib.request.Request, timeout: float) -> BytesIO:
         sent.append(json.loads(cast(bytes, request.data)))
-        return BytesIO(json.dumps({"message": {"content": content}, "done_reason": "stop"}).encode())
+        return BytesIO(
+            json.dumps(
+                {"message": {"content": content}, "done_reason": "stop"}
+            ).encode()
+        )
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     return sent
 
 
 @pytest.mark.parametrize("content", LITERAL_ANSWERS)
-def test_ollama_provider_keeps_literal_tags(monkeypatch: pytest.MonkeyPatch, content: str) -> None:
+def test_ollama_provider_keeps_literal_tags(
+    monkeypatch: pytest.MonkeyPatch, content: str
+) -> None:
     monkeypatch.delenv("OLLAMA_PREFILLED_REASONING", raising=False)
     _fake_ollama(monkeypatch, content)
 
     assert _ask(OllamaProvider()).content == content
 
 
-def test_ollama_provider_strips_prefilled_reasoning_when_declared(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ollama_provider_strips_prefilled_reasoning_when_declared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("OLLAMA_PREFILLED_REASONING", raising=False)
     _fake_ollama(monkeypatch, "17 * 3 = 51.</think>51")
     assert _ask(OllamaProvider()).content == "17 * 3 = 51.</think>51"
@@ -156,13 +194,86 @@ def test_ollama_provider_strips_prefilled_reasoning_when_declared(monkeypatch: p
     assert _ask(OllamaProvider()).content == "51"
 
 
-def test_ollama_stream_flag_still_strips_complete_message(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ollama_stream_flag_still_strips_complete_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # The provider always requests a single complete message, even when the
     # caller asks for streaming, so stripping sees the whole reply. If chunked
     # streaming is added, this needs an incremental stripper instead.
     sent = _fake_ollama(monkeypatch, '<think>plan</think>{"closing":"</think>"}')
 
-    output = _ask(OllamaProvider(), stream=True)
+    output = _ask(OllamaProvider(leading_reasoning=True), stream=True)
 
     assert sent[0]["stream"] is False
     assert output.content == '{"closing":"</think>"}'
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "<think>display this XML literally</think>",
+        "<think>display this XML literally</think><answer>keep both</answer>",
+    ],
+)
+def test_default_provider_preserves_complete_leading_xml(
+    monkeypatch: pytest.MonkeyPatch, content: str
+) -> None:
+    monkeypatch.delenv("OPENAI_LEADING_REASONING", raising=False)
+    monkeypatch.delenv("OPENAI_PREFILLED_REASONING", raising=False)
+    monkeypatch.delenv("OLLAMA_LEADING_REASONING", raising=False)
+    monkeypatch.delenv("OLLAMA_PREFILLED_REASONING", raising=False)
+    assert _ask(_openai_provider(content)).content == content
+    _fake_ollama(monkeypatch, content)
+    assert _ask(OllamaProvider()).content == content
+
+
+def test_balanced_leading_reasoning_requires_explicit_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = "<think>plan</think>answer"
+    assert _ask(_openai_provider(content, leading_reasoning=True)).content == "answer"
+    monkeypatch.setenv("OPENAI_LEADING_REASONING", "true")
+    assert _ask(_openai_provider(content)).content == "answer"
+    assert _ask(_openai_provider(content, leading_reasoning=False)).content == content
+    _fake_ollama(monkeypatch, content)
+    assert _ask(OllamaProvider(leading_reasoning=True)).content == "answer"
+    monkeypatch.setenv("OLLAMA_LEADING_REASONING", "true")
+    assert _ask(OllamaProvider()).content == "answer"
+    assert _ask(OllamaProvider(leading_reasoning=False)).content == content
+
+
+@pytest.mark.parametrize("provider_type", [AtlasProvider, AstraflowProvider])
+@pytest.mark.parametrize(
+    "content",
+    ["<think>literal XML</think>", "<think>literal XML</think><answer>whole</answer>"],
+)
+def test_hosted_providers_preserve_leading_xml(
+    monkeypatch: pytest.MonkeyPatch, provider_type: Any, content: str
+) -> None:
+    monkeypatch.setenv("OPENAI_LEADING_REASONING", "true")
+    monkeypatch.setenv("OPENAI_PREFILLED_REASONING", "true")
+    provider = provider_type(api_key="test")
+    response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=content, tool_calls=None),
+                finish_reason="stop",
+            )
+        ],
+        model="fixture",
+        usage=None,
+    )
+    provider.client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **params: response)
+        )
+    )
+    assert _ask(provider).content == content
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["<think>literal XML</think>", "<think>literal XML</think><answer>whole</answer>"],
+)
+def test_helper_defaults_preserve_leading_xml(content: str) -> None:
+    assert strip_reasoning(content) == content
