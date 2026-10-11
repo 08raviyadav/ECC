@@ -29,10 +29,10 @@ function registeredDisplay(t, payload, options = {}, bridge) {
   fs.writeFileSync(settingsPath, JSON.stringify({ statusLine: { ...example.statusLine, command } }));
   const before = fs.readFileSync(settingsPath);
   const settings = JSON.parse(before);
-  const env = { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: configDir, TMPDIR: temporaryDir,
+  const env = { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: configDir, TMPDIR: temporaryDir, TEMP: temporaryDir, TMP: temporaryDir,
     ECC_STATUSLINE_USAGE: '1', ECC_STATUSLINE_COMPACT: '0', ECC_BAR_GLYPHS: 'ascii', ...options };
   if (env.ECC_STATUSLINE_USAGE === undefined) delete env.ECC_STATUSLINE_USAGE;
-  const result = spawnSync('/bin/sh', ['-c', settings.statusLine.command], {
+  const result = spawnSync(process.platform === 'win32' ? 'bash' : '/bin/sh', ['-c', settings.statusLine.command], {
     input: JSON.stringify(payload), encoding: 'utf8', env, timeout: 5000, cwd: home,
   });
   assert.equal(result.status, 0, result.stderr);

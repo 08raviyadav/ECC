@@ -157,6 +157,7 @@ function breakStaleLock(dir) {
 function acquireLock(dir, waitMs) {
   const lock = path.join(dir, '.lock');
   const deadline = Date.now() + waitMs;
+  let accessError = null;
   for (;;) {
     try {
       // A live descriptor keeps this inode allocated, even if a foreign writer
@@ -164,13 +165,16 @@ function acquireLock(dir, waitMs) {
       const owner = writeNew(lock, JSON.stringify({ pid: process.pid, host: os.hostname(), at: new Date().toISOString() }), { keepOpen: true });
       return () => { try { removeOwned(lock, owner); } finally { fs.closeSync(owner.fd); } };
     } catch (err) {
-      if (err.code !== 'EEXIST') throw err;
+      if (err.code === 'EEXIST') accessError = null;
+      else if (process.platform === 'win32' && ['EPERM', 'EACCES', 'EBUSY'].includes(err.code)) accessError = err.code;
+      else throw err;
     }
     const holder = readLock(dir); // null: lock vanished or half-written; retry
     if (holder && isStale(holder) && breakStaleLock(dir)) continue;
     if (Date.now() > deadline) {
       const brk = fs.existsSync(path.join(dir, '.lock.break')) ? '; .lock.break is held (delete it only if no ledger command is running)' : '';
-      throw new LedgerError(`ledger locked by pid ${holder && holder.pid} since ${holder && holder.at}${brk}`, 3);
+      const denied = accessError ? `; Windows file access ${accessError}; check active writers or directory permissions` : '';
+      throw new LedgerError(`ledger locked by pid ${holder && holder.pid} since ${holder && holder.at}${brk}${denied}`, 3);
     }
     sleep(25 + Math.floor(Math.random() * 50));
   }

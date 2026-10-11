@@ -318,11 +318,14 @@ const tests = [
     fs.writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 + 1, host: os.hostname(), at: 'stale' }));
     // Preload: right after the waiter reads the stale lock, another writer wins and holds a live lock.
     const preload = path.join(root, 'race.js');
-    fs.writeFileSync(preload, `const fs = require('fs'); const orig = fs.openSync; let raced = false;
-fs.openSync = function (p, ...a) { const r = orig.call(fs, p, ...a);
-  if (!raced && String(p).endsWith('.lock') && a[0] === (fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0))) { raced = true; fs.unlinkSync(p);
+    fs.writeFileSync(preload, `const fs = require('fs'); const orig = fs.openSync; let raced = false; const observed = new Map();
+fs.openSync = function (p, ...a) { const fd = orig.call(fs, p, ...a);
+  if (String(p).endsWith('.lock') && a[0] === (fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0))) observed.set(fd, p);
+  return fd; };
+const close = fs.closeSync; fs.closeSync = function (fd) { const p = observed.get(fd); observed.delete(fd); close.call(fs, fd);
+  if (!raced && p) { raced = true; fs.unlinkSync(p);
     fs.writeFileSync(p, JSON.stringify({ pid: ${process.pid}, host: require('os').hostname(), at: 'live' }), { flag: 'wx' }); }
-  return r; };`);
+};`);
     const r = spawnSync(process.execPath, ['-r', preload, LEDGER, 'allocate', '--epic', 'auth-flow', '--root', root, '--wait-ms', '200'], { encoding: 'utf8' });
     assert.strictEqual(r.status, 3, `expected lock timeout, got ${r.status}: ${r.stderr}`);
     assert.ok(fs.readFileSync(lock, 'utf8').includes('live'), 'live lock was deleted');
@@ -409,7 +412,7 @@ fs.openSync = function (p, ...a) { const r = orig.call(fs, p, ...a);
     fs.writeFileSync(victim, 'ORIGINAL');
     const preload = path.join(root, 'race.js');
     fs.writeFileSync(preload, `const fs = require('fs'); let planted = false;
-const plant = (p) => { if (!planted && String(p).endsWith('/.stories/.gitignore')) {
+const plant = (p) => { if (!planted && String(p).split(require('path').sep).join('/').endsWith('/.stories/.gitignore')) {
   planted = true; fs.symlinkSync(${JSON.stringify(victim)}, p); } };
 const exists = fs.existsSync; fs.existsSync = function (p) { const result = exists.call(fs, p);
   if (!result) plant(p); return result; };
@@ -473,7 +476,7 @@ for (const name of ['renameSync', 'linkSync']) { const original = fs[name]; fs[n
     const victim = path.join(root, 'victim.txt'); fs.writeFileSync(victim, 'ORIGINAL');
     const preload = path.join(root, 'stage-race.js');
     fs.writeFileSync(preload, `const fs = require('fs'); let planted = false;
-const plant = (p) => { if (!planted && String(p).endsWith('/.txn/new-0')) {
+const plant = (p) => { if (!planted && String(p).split(require('path').sep).join('/').endsWith('/.txn/new-0')) {
  planted = true; fs.symlinkSync(${JSON.stringify(victim)}, p); } };
 const open = fs.openSync; fs.openSync = function (p, ...a) { plant(p); return open.call(fs, p, ...a); };
 const write = fs.writeFileSync; fs.writeFileSync = function (p, ...a) { plant(p); return write.call(fs, p, ...a); };`);
@@ -501,10 +504,18 @@ const write = fs.writeFileSync; fs.writeFileSync = function (p, ...a) { plant(p)
     const preload = path.join(root, 'lock-owner-race.js');
     fs.writeFileSync(preload, `const fs = require('fs'); const original = fs.rmSync; let replaced = false;
 fs.rmSync = function (p, ...args) { const result = original.call(fs, p, ...args);
- if (!replaced && String(p).endsWith('/.stories/.txn')) { replaced = true; fs.unlinkSync(${JSON.stringify(lock)});
+ if (!replaced && String(p).split(require('path').sep).join('/').endsWith('/.stories/.txn')) { replaced = true; fs.unlinkSync(${JSON.stringify(lock)});
   fs.writeFileSync(${JSON.stringify(lock)}, JSON.stringify({pid:${process.pid},host:require('os').hostname(),at:'replacement'}), {flag:'wx'}); }
  return result; };`);
     const result = spawnSync(process.execPath, ['-r', preload, LEDGER, 'apply', '--input', input, '--root', root], { encoding: 'utf8' });
+    // Some Windows Node versions prevent re-creating an open delete-pending
+    // lock. The injected foreign writer is rejected before it can take ownership.
+    if (process.platform === 'win32' && result.status === 1 && /(?:EPERM|EACCES|EBUSY).*open[^\n]*\.lock/.test(result.stderr)) {
+      assert.strictEqual(storyFiles(root).length, 1, 'original publication completed');
+      assert.ok(read(root, storyFiles(root)[0]).includes('Ours'));
+      assert.ok(!fs.existsSync(lock), 'process exit releases the old delete-pending lock');
+      return;
+    }
     assert.strictEqual(result.status, 0, result.stderr);
     assert.ok(fs.readFileSync(lock, 'utf8').includes('replacement'));
   }],
@@ -524,7 +535,7 @@ const close = fs.closeSync; fs.closeSync = function (value) {
  if (value === fd) closed = true; return close.call(fs, value); };
 const remove = fs.rmSync; fs.rmSync = function (p, ...a) {
  const result = remove.call(fs, p, ...a);
- if (!replaced && String(p).endsWith('/.stories/.txn')) {
+ if (!replaced && String(p).split(require('path').sep).join('/').endsWith('/.stories/.txn')) {
   replaced = true; fs.unlinkSync(${JSON.stringify(lock)});
   fs.writeFileSync(${JSON.stringify(lock)}, JSON.stringify({ pid: ${process.pid}, host: require('os').hostname(), at: 'replacement' }), { flag: 'wx' });
  } return result; };
@@ -533,6 +544,14 @@ const stat = fs.lstatSync; fs.lstatSync = function (p, ...a) {
  return replaced && closed && String(p) === ${JSON.stringify(lock)} ? oldStat : result;
 };`);
     const result = spawnSync(process.execPath, ['-r', preload, LEDGER, 'apply', '--input', input, '--root', root], { encoding: 'utf8' });
+    // Some Windows Node versions prevent re-creating an open delete-pending
+    // lock. The injected foreign writer is rejected before it can take ownership.
+    if (process.platform === 'win32' && result.status === 1 && /(?:EPERM|EACCES|EBUSY).*open[^\n]*\.lock/.test(result.stderr)) {
+      assert.strictEqual(storyFiles(root).length, 1, 'original publication completed');
+      assert.ok(read(root, storyFiles(root)[0]).includes('Inode owner'));
+      assert.ok(!fs.existsSync(lock), 'process exit releases the old delete-pending lock');
+      return;
+    }
     assert.strictEqual(result.status, 0, result.stderr);
     assert.ok(fs.readFileSync(lock, 'utf8').includes('replacement'));
   }],
@@ -547,13 +566,44 @@ const stat = fs.lstatSync; fs.lstatSync = function (p, ...a) {
     const preload = path.join(root, 'recover-crash.js');
     fs.writeFileSync(preload, `const fs = require('fs'); const original = fs.renameSync;
 fs.renameSync = function (source, ...args) { const result = original.call(fs, source, ...args);
- if (String(source).endsWith('/.txn/restore.tmp')) process.exit(70); return result; };`);
+ if (String(source).split(require('path').sep).join('/').endsWith('/.txn/restore.tmp')) process.exit(70); return result; };`);
     const recovery = spawnSync(process.execPath, ['-r', preload, LEDGER, 'recover', '--root', root], { encoding: 'utf8' });
     assert.strictEqual(recovery.status, 70);
     const retry = run(root, ['recover']);
     assert.strictEqual(retry.code, 0, retry.err);
     assert.strictEqual(read(root, `${ids[0]}.md`), before);
     assert.deepStrictEqual(run(root, ['status']).out.drift, []);
+  }],
+
+  ['Windows sharing denial during lock publication is retried within the deadline', () => {
+    const root = newRepo();
+    const preload = path.join(root, 'sharing-retry.js');
+    fs.writeFileSync(preload, `require('path'); Object.defineProperty(process, 'platform', { value: 'win32' });
+const fs = require('fs'); const original = fs.openSync; let attempts = 0;
+fs.openSync = function (p, flags, ...args) {
+ if (String(p).endsWith('.lock') && (flags & fs.constants.O_EXCL) && attempts++ < 2) {
+  throw Object.assign(new Error('simulated delete-pending sharing denial'), { code: 'EPERM' });
+ } return original.call(fs, p, flags, ...args); };`);
+    const result = spawnSync(process.execPath, ['-r', preload, LEDGER, 'allocate', '--root', root,
+      '--epic', 'auth-flow', '--wait-ms', '1000'], { encoding: 'utf8', timeout: 3000 });
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.deepStrictEqual(JSON.parse(result.stdout).ids, ['auth-flow-1']);
+  }],
+
+  ['permanent Windows sharing denial expires without creating an allocation', () => {
+    const root = newRepo();
+    const preload = path.join(root, 'sharing-denied.js');
+    fs.writeFileSync(preload, `require('path'); Object.defineProperty(process, 'platform', { value: 'win32' });
+const fs = require('fs'); const original = fs.openSync;
+fs.openSync = function (p, flags, ...args) {
+ if (String(p).endsWith('.lock') && (flags & fs.constants.O_EXCL)) {
+  throw Object.assign(new Error('simulated permanent sharing denial'), { code: 'EACCES' });
+ } return original.call(fs, p, flags, ...args); };`);
+    const result = spawnSync(process.execPath, ['-r', preload, LEDGER, 'allocate', '--root', root,
+      '--epic', 'auth-flow', '--wait-ms', '40'], { encoding: 'utf8', timeout: 2000 });
+    assert.strictEqual(result.status, 3, result.stderr || result.error?.message);
+    assert.match(result.stderr, /Windows file access EACCES/);
+    assert.ok(!fs.existsSync(path.join(root, '.git', 'story-lifecycle', 'ids', 'auth-flow-1')));
   }],
 
   ['ledger paths are confined to .stories/ file shapes', () => {
