@@ -462,7 +462,7 @@ const open = fs.openSync; fs.openSync = function (p, ...args) { plant(p); return
 const plant = (target) => { if (!planted && target === ${JSON.stringify(target)}) {
   planted = true; fs.writeFileSync(target, 'COMPETING OWNER', {flag:'wx'}); } };
 for (const name of ['renameSync', 'linkSync']) { const original = fs[name]; fs[name] = function (source, target, ...a) {
-  if (String(source).includes('/.txn/new-')) plant(target); return original.call(fs, source, target, ...a); }; }`);
+  if (String(source).split(require('path').sep).join('/').includes('/.txn/new-')) plant(target); return original.call(fs, source, target, ...a); }; }`);
     const result = spawnSync(process.execPath, ['-r', preload, LEDGER, 'apply', '--input', input, '--root', root], { encoding: 'utf8' });
     assert.notStrictEqual(result.status, 0, 'publication must not overwrite another owner');
     assert.strictEqual(fs.readFileSync(target, 'utf8'), 'COMPETING OWNER');
