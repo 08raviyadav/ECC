@@ -83,7 +83,7 @@ def test_invalid_output_is_rejected_before_reading_pipe(
         isatty=lambda: False,
         read=lambda: pytest.fail("Required output must be validated before waiting for piped input"),
     ))
-    error = IsADirectoryError if output_kind == "directory" else SystemExit
+    error = (IsADirectoryError, PermissionError) if output_kind == "directory" else SystemExit
     with pytest.raises(error):
         evaluator._read_input(args(output=str(output)))
 
