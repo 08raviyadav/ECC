@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const net = require('node:net');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { once } = require('node:events');
 const test = require('node:test');
 
@@ -58,5 +58,15 @@ for (const value of ['0', '-1', '65536', '1.5', 'not-a-port']) {
     const [code] = await once(child, 'exit');
     assert.equal(code, 1);
     assert.match(stderr, /ECC_RELAY_LISTEN must be an integer port/);
+  });
+}
+
+for (const port of ['1455', '24567']) {
+  test(`rejects self-relaying port ${port} before listening`, () => {
+    const child = spawnSync(process.execPath, [script], { timeout: 1500, encoding: 'utf8',
+      env: { ...process.env, ECC_RELAY_LISTEN: port, ECC_RELAY_TARGET: port } });
+    assert.equal(child.status, 1, 'equal ports must exit immediately without a listener');
+    assert.match(child.stderr, /ECC_RELAY_LISTEN and ECC_RELAY_TARGET must differ/);
+    assert.equal(child.stdout, '');
   });
 }
