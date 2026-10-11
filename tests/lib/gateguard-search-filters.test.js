@@ -86,5 +86,45 @@ test('PowerShell -Exclude binds from an unambiguous prefix', () => {
   assert.deepStrictEqual(filter.globs, ['a.py', 'widget.py']);
 });
 
+const admitted = (item, rel) => filtersAdmitTarget(item, ctxFor(rel), null) && admits(item, rel);
+
+test('rg -t/--type selects ripgrep type globs instead of being skipped', () => {
+  for (const args of [['-t', 'py'], ['-tpy'], ['--type', 'py'], ['--type=py'], ['-it', 'py']]) {
+    const item = rgItem([...args, 'tokenizer', 'src']);
+    assert.strictEqual(admitted(item, 'src/tokenizer.js'), false, args.join(' '));
+    assert.strictEqual(admitted(item, 'src/tokenizer.pyi'), true, args.join(' '));
+  }
+  assert.strictEqual(admitted(rgItem(['-t', 'js', 'x']), 'src/tokenizer.mjs'), true);
+  assert.strictEqual(admitted(rgItem(['-t', 'py', '-t', 'js', 'x']), 'src/tokenizer.js'), true, 'types are alternatives');
+});
+
+test('rg -T/--type-not excludes the type globs', () => {
+  for (const args of [['-T', 'js'], ['-Tjs'], ['--type-not', 'js'], ['--type-not=js']]) {
+    assert.strictEqual(admitted(rgItem([...args, 'x']), 'src/tokenizer.js'), false, args.join(' '));
+    assert.strictEqual(admitted(rgItem([...args, 'x']), 'src/tokenizer.py'), true, args.join(' '));
+  }
+});
+
+test('unknown or redefined rg types are unreadable filters', () => {
+  for (const args of [['-t', 'nosuchtype'], ['-T', 'nosuchtype'], ['--type-add', 'web:*.js', '-t', 'web'], ['--type-clear', 'js']]) {
+    assert.strictEqual(admitted(rgItem([...args, 'x']), 'src/tokenizer.js'), false, args.join(' '));
+  }
+});
+
+test('fd -e/--extension is an include', () => {
+  const fdItem = args => ({ ...shellSearchFilters('fd', args), scopes: [['.']], pathIncludes: false });
+  for (const args of [['-e', 'py'], ['-epy'], ['--extension', 'py'], ['--extension=.py']]) {
+    assert.strictEqual(admitted(fdItem([...args, 'tokenizer', 'src']), 'src/tokenizer.js'), false, args.join(' '));
+    assert.strictEqual(admitted(fdItem([...args, 'tokenizer', 'src']), 'src/tokenizer.py'), true, args.join(' '));
+  }
+});
+
+test('the Grep tool type parameter is an include, and an unknown type is unreadable', () => {
+  const grepItem = (glob, type) => ({ ...grepToolFilters(glob, type), scopes: [['.']], pathIncludes: true });
+  assert.strictEqual(admitted(grepItem(undefined, 'py'), 'src/tokenizer.js'), false);
+  assert.strictEqual(admitted(grepItem(undefined, 'py'), 'src/tokenizer.py'), true);
+  assert.strictEqual(admitted(grepItem(undefined, 'nosuchtype'), 'src/tokenizer.js'), false);
+});
+
 console.log(`\nResults: Passed: ${passed}, Failed: ${failed}`);
 process.exit(failed > 0 ? 1 : 0);
