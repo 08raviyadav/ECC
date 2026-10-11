@@ -102,5 +102,43 @@ test('an occupied final safe snapshot path refuses creation while preserving the
   assert.equal(fs.existsSync(versioning.getEvolutionDir(skillDir)), false);
 });
 
+test('exhausted rollback preserves unsnapshotted content, snapshot files and evolution state', fixture => {
+  const { skillDir, versionsDir } = fixture;
+  fs.mkdirSync(versionsDir);
+  const previous = path.join(versionsDir, 'v1.md');
+  const last = path.join(versionsDir, `v${Number.MAX_SAFE_INTEGER}.md`);
+  fs.writeFileSync(previous, '# Previous\n');
+  fs.writeFileSync(last, '# Latest snapshot\n');
+  const assertPreserved = () => {
+    assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), '# Original\n');
+    assert.equal(fs.readFileSync(previous, 'utf8'), '# Previous\n');
+    assert.equal(fs.readFileSync(last, 'utf8'), '# Latest snapshot\n');
+    assert.equal(fs.readdirSync(versionsDir).length, 2);
+  };
+  assert.throws(() => versioning.rollbackTo(skillDir, 1), /snapshot version range is exhausted/);
+  assertPreserved();
+  assert.equal(fs.existsSync(versioning.getEvolutionDir(skillDir)), false);
+  versioning.ensureSkillVersioning(skillDir);
+  const logs = versioning.EVOLUTION_LOG_TYPES.map(type => versioning.getEvolutionLogPath(skillDir, type));
+  for (const file of logs) fs.writeFileSync(file, '{"event":"preserve"}\n');
+  assert.throws(() => versioning.rollbackTo(skillDir, 1), /snapshot version range is exhausted/);
+  assertPreserved();
+  for (const file of logs) assert.equal(fs.readFileSync(file, 'utf8'), '{"event":"preserve"}\n');
+});
+
+test('unsafe rollback targets preserve the live skill and excluded snapshots', fixture => {
+  const { skillDir, versionsDir } = fixture;
+  fs.mkdirSync(versionsDir);
+  const invalid = path.join(versionsDir, 'v9007199254740992.md');
+  fs.writeFileSync(invalid, '# Excluded snapshot\n');
+  for (const target of [9007199254740992, '9007199254740992']) {
+    assert.throws(() => versioning.rollbackTo(skillDir, target), /Invalid target version/);
+    assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), '# Original\n');
+    assert.equal(fs.readFileSync(invalid, 'utf8'), '# Excluded snapshot\n');
+    assert.equal(fs.readdirSync(versionsDir).length, 1);
+    assert.equal(fs.existsSync(versioning.getEvolutionDir(skillDir)), false);
+  }
+});
+
 console.log(`Results: Passed: ${passed}, Failed: ${failed}`);
 process.exitCode = failed > 0 ? 1 : 0;

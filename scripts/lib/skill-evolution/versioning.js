@@ -169,9 +169,7 @@ function getEvolutionLog(skillPath, logType) {
   return readJsonl(getEvolutionLogPath(skillPath, logType));
 }
 
-function createVersion(skillPath, options = {}) {
-  const skillFilePath = ensureSkillExists(skillPath);
-
+function allocateSnapshotVersion(skillPath) {
   const versions = listVersions(skillPath);
   const versionsDir = getVersionsDir(skillPath);
   const occupiedPaths = new Set(fs.existsSync(versionsDir) ? fs.readdirSync(versionsDir) : []);
@@ -183,6 +181,13 @@ function createVersion(skillPath, options = {}) {
   if (!Number.isSafeInteger(nextVersion)) {
     throw new Error('Skill snapshot version range is exhausted; existing snapshots were preserved');
   }
+  return nextVersion;
+}
+
+function createVersion(skillPath, options = {}) {
+  const skillFilePath = ensureSkillExists(skillPath);
+  const nextVersion = allocateSnapshotVersion(skillPath);
+  const versionsDir = getVersionsDir(skillPath);
   ensureSkillVersioning(skillPath);
   const snapshotPath = path.join(versionsDir, `v${nextVersion}.md`);
   const skillContent = fs.readFileSync(skillFilePath, 'utf8');
@@ -207,12 +212,11 @@ function createVersion(skillPath, options = {}) {
 
 function rollbackTo(skillPath, targetVersion, options = {}) {
   const normalizedTargetVersion = Number(targetVersion);
-  if (!Number.isInteger(normalizedTargetVersion) || normalizedTargetVersion <= 0) {
+  if (!Number.isSafeInteger(normalizedTargetVersion) || normalizedTargetVersion <= 0) {
     throw new Error(`Invalid target version: ${targetVersion}`);
   }
 
   ensureSkillExists(skillPath);
-  ensureSkillVersioning(skillPath);
 
   const targetPath = path.join(getVersionsDir(skillPath), `v${normalizedTargetVersion}.md`);
   if (!fs.existsSync(targetPath)) {
@@ -221,6 +225,7 @@ function rollbackTo(skillPath, targetVersion, options = {}) {
 
   const currentVersion = getCurrentVersion(skillPath);
   const targetContent = fs.readFileSync(targetPath, 'utf8');
+  allocateSnapshotVersion(skillPath);
   fs.writeFileSync(getSkillFilePath(skillPath), targetContent, 'utf8');
 
   const createdVersion = createVersion(skillPath, {
