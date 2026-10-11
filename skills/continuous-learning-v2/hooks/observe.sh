@@ -273,7 +273,7 @@ import json, sys, os, re
 # prevent the catastrophic backtracking that pegged python at 100% CPU (#2278).
 _SECRET_RE = re.compile(
     r"(?i)(api[_-]?key|token|secret|password|authorization|credentials?|auth)"
-    r"""(["'"'"'\s:=]{1,8})"""
+    r"""(["'"'"'\s:=\\]{1,8})"""
     r"((?:bearer|basic|token|bot)\s+)?"
     r"([A-Za-z0-9_\-/.+=]{8,256})"
 )
@@ -336,14 +336,15 @@ observation = {
     "project_name": os.environ.get("PROJECT_NAME_ENV", "global")
 }
 
-# Scrub secrets: match common key=value, key: value, and key"value patterns
+# Scrub secrets, including JSON-escaped quotes/backslashes in serialized tool I/O.
+# This is defense in depth; arbitrary content still requires a metadata-only capture boundary.
 # Includes optional auth scheme (e.g., "Bearer", "Basic") before token
 # Linear-time secret matcher. Bounded quantifiers and a fixed set of auth
 # schemes (instead of a generic [A-Za-z]+\s+ that overlapped the value class)
 # prevent the catastrophic backtracking that pegged python at 100% CPU (#2278).
 _SECRET_RE = re.compile(
     r"(?i)(api[_-]?key|token|secret|password|authorization|credentials?|auth)"
-    r"""(["'"'"'\s:=]{1,8})"""
+    r"""(["'"'"'\s:=\\]{1,8})"""
     r"((?:bearer|basic|token|bot)\s+)?"
     r"([A-Za-z0-9_\-/.+=]{8,256})"
 )
