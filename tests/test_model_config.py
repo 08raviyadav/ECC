@@ -117,3 +117,13 @@ def test_cn_blank_specific_model_uses_normalized_shared_model(
 
     assert get_provider(ProviderType.ASTRAFLOW_CN).get_default_model() == "Shared/MixedCase-model"
     assert AstraflowCNProvider().get_default_model() == "Shared/MixedCase-model"
+
+
+@pytest.mark.parametrize("default_model", (None, ""))
+def test_unset_constructor_model_uses_selected_model(
+    monkeypatch: pytest.MonkeyPatch, default_model: str | None
+) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "Selected-Case-Model")
+    provider = get_provider("openai", api_key="test-key", default_model=default_model)
+    assert provider.get_default_model() == "Selected-Case-Model"

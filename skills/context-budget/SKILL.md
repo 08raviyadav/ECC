@@ -131,4 +131,3 @@ values, missing or non-string types, and blank lines are unclassified. Neither c
 These counts do not establish active context, remaining room, token usage, billing, or what a
 reconnect loads. For current harness-reported context and usage, use the version-appropriate
 [`/context` and `/usage` commands (`/cost` is an alias)](https://code.claude.com/docs/en/commands).
-

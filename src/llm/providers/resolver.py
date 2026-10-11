@@ -111,7 +111,7 @@ def get_provider(provider_type: ProviderType | str | None = None, **kwargs: str 
     if not provider_cls:
         raise ValueError(f"No provider registered for type: {provider_type}")
 
-    if "default_model" not in kwargs and provider_cls in _MODEL_ENV_VARS:
+    if not kwargs.get("default_model") and provider_cls in _MODEL_ENV_VARS:
         model = _resolve_default_model(provider_type, provider_cls, saved_model)
         if model:
             kwargs = {**kwargs, "default_model": model}
