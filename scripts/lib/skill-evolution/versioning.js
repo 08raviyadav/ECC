@@ -179,7 +179,7 @@ function allocateSnapshotVersion(skillPath) {
     nextVersion += 1;
   }
   if (!Number.isSafeInteger(nextVersion)) {
-    throw new Error('Skill snapshot version range is exhausted; existing snapshots were preserved');
+    throw new Error('Skill snapshot version range is exhausted; safe integer allocation is unavailable; existing snapshots were preserved');
   }
   return nextVersion;
 }
