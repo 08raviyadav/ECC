@@ -124,10 +124,11 @@ function computeCacheStats(currentUsage) {
   return { hitPct: Math.round((read / total) * 100) };
 }
 
-function usageSegment(label, labelColor, window) {
-  const pct = Math.round(window?.used_percentage ?? -1);
-  if (pct < 0) return '';
+function usageSegment(label, labelColor, window, compact = false) {
+  if (!Number.isFinite(window?.used_percentage) || window.used_percentage < 0) return '';
+  const pct = Math.round(window.used_percentage);
   const color = pctColor(pct, labelColor);
+  if (compact) return `${labelColor}${label}${C.reset} ${color}${pct}%${C.reset}`;
   const reset = formatCountdown(window.resets_at);
   const resetStr = reset ? ` ${C.dim}${G.reset}${reset}${C.reset}` : '';
   return `${labelColor}${label}${C.reset} ${color}${buildBar(pct)} ${pct}%${C.reset}${resetStr}`;
@@ -137,12 +138,14 @@ function usageSegment(label, labelColor, window) {
  * Line 1: rate-limit windows + prompt cache.
  * Returns '' when no rate limit data is available (e.g. API-key billing).
  */
-function buildUsageLine(rateLimits, cacheStats) {
+function buildUsageLine(rateLimits, cacheStats, { compact = false } = {}) {
   const parts = [];
-  const fiveHour = usageSegment('5h', C.amber, rateLimits?.five_hour);
-  const sevenDay = usageSegment('7d', C.terracotta, rateLimits?.seven_day);
+  const fiveHour = usageSegment('5h', C.amber, rateLimits?.five_hour, compact);
+  const sevenDay = usageSegment('7d', C.terracotta, rateLimits?.seven_day, compact);
+  const spendLimit = usageSegment('spend', C.amber, rateLimits?.spend_limit, compact);
   if (fiveHour) parts.push(fiveHour);
   if (sevenDay) parts.push(sevenDay);
+  if (spendLimit) parts.push(spendLimit);
   if (cacheStats && parts.length > 0) {
     const cacheColor = cacheStats.hitPct >= 50 ? C.green : C.dim;
     parts.push(`${C.dim}cache${C.reset} ${cacheColor}${cacheStats.hitPct}%${C.reset}`);

@@ -409,8 +409,10 @@ docker compose -p ecc-plugin-session \
 Host credentials are absent by default and credential directories are never
 mounted. The default service also has no network access. When an authenticated
 provider session genuinely needs a network, build `real-cli` first and then opt
-in visibly with `docker compose --profile networked run real-cli-networked
-shell`. Prefer authenticating inside that disposable session. If a CI run must
+in visibly with `docker compose -f docker/plugin-setup/compose.yaml
+--profile networked run --service-ports real-cli-networked shell`. The
+`--service-ports` flag publishes the service's loopback callback mapping.
+Prefer authenticating inside that disposable session. If a CI run must
 inherit a host environment credential, make that opt-in at invocation with an
 explicit Compose `--env NAME` flag, understand that the value is inspectable
 and can be exfiltrated for the container lifetime, and remove the exact named
@@ -426,12 +428,16 @@ without a bridge. The `real-cli-networked` service publishes host
 logging in:
 
 ```bash
-npm install --global @openai/codex   # the harness image does not ship codex
+npm install --global @openai/codex@0.162.0   # the harness image does not ship codex
 node /ecc/docker/plugin-setup/codex-auth-relay.js &
 relay_pid=$!
 codex login
 kill "$relay_pid"
 ```
+
+The networked service sets `NPM_CONFIG_PREFIX=/tmp/ecc-npm` and adds its `bin`
+directory to `PATH`. This keeps the pinned installation writable for UID 1000
+on the executable `/tmp` mount while the root filesystem remains read-only.
 
 Complete the sign-in in the host browser. Each attempt mints a fresh
 `state`/`code`, so always follow the newest printed link. The token stays in
