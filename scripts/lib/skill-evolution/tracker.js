@@ -103,7 +103,10 @@ function readJsonl(filePath) {
     .reduce((rows, line) => {
       try {
         const record = JSON.parse(line);
-        if (record && typeof record === 'object' && !Array.isArray(record)) {
+        if (record && typeof record === 'object' && !Array.isArray(record)
+          && typeof record.skill_id === 'string' && record.skill_id.trim().length > 0
+          && VALID_OUTCOMES.has(record.outcome)
+          && typeof record.recorded_at === 'string' && !Number.isNaN(Date.parse(record.recorded_at))) {
           rows.push(record);
         }
       } catch {

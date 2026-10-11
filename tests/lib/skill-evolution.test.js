@@ -320,7 +320,7 @@ function runTests() {
           duration_ms: 1,
           user_feedback: 'accepted',
           recorded_at: '2026-03-15T11:45:00.000Z',
-        })}\n{bad-json}\nnull\n42\nfalse\n"not a record"\n[]\n`,
+        })}\n{bad-json}\nnull\n42\nfalse\n"not a record"\n[]\n{}\n{"skill_id":42}\n{"skill_id":""}\n{"skill_id":"alpha","outcome":"invalid","recorded_at":"2026-03-15T11:45:00.000Z"}\n{"skill_id":"alpha","outcome":"success","recorded_at":"bad-date"}\n`,
         'utf8'
       );
 

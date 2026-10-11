@@ -100,7 +100,14 @@ function listVersions(skillPath) {
       }
 
       const filePath = path.join(versionsDir, fileName);
-      const stats = fs.statSync(filePath);
+      let stats;
+      try {
+        stats = fs.statSync(filePath);
+      } catch (error) {
+        // A dangling link still occupies a path, but is not a readable snapshot.
+        if (error.code === 'ENOENT') return null;
+        throw error;
+      }
       if (!stats.isFile()) {
         return null;
       }
@@ -146,7 +153,10 @@ function readJsonl(filePath) {
     .filter(Boolean)
     .reduce((rows, line) => {
       try {
-        rows.push(JSON.parse(line));
+        const record = JSON.parse(line);
+        if (record && typeof record === 'object' && !Array.isArray(record)) {
+          rows.push(record);
+        }
       } catch {
         // Ignore malformed rows so the log remains append-only and resilient.
       }
@@ -163,12 +173,18 @@ function createVersion(skillPath, options = {}) {
   ensureSkillVersioning(skillPath);
 
   const versions = listVersions(skillPath);
-  const nextVersion = versions.length === 0 ? 1 : versions[versions.length - 1].version + 1;
-  const snapshotPath = path.join(getVersionsDir(skillPath), `v${nextVersion}.md`);
+  const versionsDir = getVersionsDir(skillPath);
+  const occupiedPaths = new Set(fs.readdirSync(versionsDir));
+  let nextVersion = versions.length === 0 ? 1 : versions[versions.length - 1].version + 1;
+  // Listing excludes non-files, but their paths remain user-owned and occupied.
+  while (occupiedPaths.has(`v${nextVersion}.md`)) {
+    nextVersion += 1;
+  }
+  const snapshotPath = path.join(versionsDir, `v${nextVersion}.md`);
   const skillContent = fs.readFileSync(skillFilePath, 'utf8');
   const createdAt = options.timestamp || new Date().toISOString();
 
-  fs.writeFileSync(snapshotPath, skillContent, 'utf8');
+  fs.writeFileSync(snapshotPath, skillContent, { encoding: 'utf8', flag: 'wx' });
   appendEvolutionRecord(skillPath, 'amendments', {
     event: 'snapshot',
     version: nextVersion,
