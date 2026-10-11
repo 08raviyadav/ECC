@@ -86,13 +86,26 @@ function estimateMetadata(entries, target, profile) {
   };
 }
 
-function compileContextProfile({
+function validatePlanOptions({ selectionMode = 'manual', target = 'codex' }) {
+  validateTarget(target);
+  if (!MODES.includes(selectionMode)) throw new Error(`Unknown selection mode: ${selectionMode}`);
+}
+
+function compileContextProfile(options = {}) {
+  validatePlanOptions(options);
+  return compileContextPlan(loadContextRegistry({ repoRoot: options.repoRoot || DEFAULT_REPO_ROOT }), options);
+}
+
+/**
+ * Compile a plan against a registry the caller loaded in the same call, so a
+ * caller that also needs the registry hashes its sources once. Callers pass
+ * the result of `loadContextRegistry` directly; nothing keeps one across calls.
+ */
+function compileContextPlan(registry, {
   repoRoot = DEFAULT_REPO_ROOT, profileId = 'lean@1', selectionMode = 'manual',
   target = 'codex', include = [], exclude = [],
 } = {}) {
-  validateTarget(target);
-  if (!MODES.includes(selectionMode)) throw new Error(`Unknown selection mode: ${selectionMode}`);
-  const registry = loadContextRegistry({ repoRoot });
+  validatePlanOptions({ selectionMode, target });
   const profile = loadContextProfile(profileId, { repoRoot });
   if (profile.registryId !== registry.id) throw new Error('Profile registry ID mismatch');
   const selected = resolveSelection(registry, profile, include, exclude);
@@ -130,4 +143,4 @@ function compileContextProfile({
   return plan;
 }
 
-module.exports = { compileContextProfile, explainContextEntry, loadContextProfile };
+module.exports = { compileContextProfile, compileContextPlan, explainContextEntry, loadContextProfile };
