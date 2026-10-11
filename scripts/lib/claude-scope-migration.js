@@ -46,35 +46,47 @@ function recoveryCommands(sourceScope, destinationScope) {
   return commands;
 }
 
-function enableRecoveryCommands(destinationScope) {
+function enableRecoveryCommands(destinationScope, enableScope = destinationScope) {
   return [
-    `claude plugin enable ${CURRENT_PLUGIN_ID} --scope ${destinationScope}`,
+    `claude plugin enable ${CURRENT_PLUGIN_ID} --scope ${enableScope}`,
     ...recoveryCommands(null, destinationScope),
   ];
 }
 
-function destinationSettingsPaths(paths, destinationScope) {
+function destinationSettingsPaths(paths) {
   const projectSettingsDir = path.join(paths.projectRoot, '.claude');
-  if (destinationScope === 'user') {
-    return [path.join(paths.configDir, 'settings.json')];
-  }
-  if (destinationScope === 'project') {
-    return [path.join(projectSettingsDir, 'settings.json')];
-  }
   return [
-    path.join(projectSettingsDir, 'settings.local.json'),
-    path.join(projectSettingsDir, 'settings.json'),
+    { scope: 'local', settingsPath: path.join(projectSettingsDir, 'settings.local.json') },
+    { scope: 'project', settingsPath: path.join(projectSettingsDir, 'settings.json') },
+    { scope: 'user', settingsPath: path.join(paths.configDir, 'settings.json') },
   ];
 }
 
-function readExplicitlyDisabledSettings(settingsPath) {
+function readPluginEnabledSetting(settingsPath) {
   try {
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    return settings?.enabledPlugins?.[CURRENT_PLUGIN_ID] === false;
+    const enabled = settings?.enabledPlugins?.[CURRENT_PLUGIN_ID];
+    return typeof enabled === 'boolean' ? enabled : null;
   } catch {
     // Missing or unreadable settings are not an explicit user choice.
-    return false;
+    return null;
   }
+}
+
+function effectiveDestinationSetting(paths) {
+  for (const setting of destinationSettingsPaths(paths)) {
+    const enabled = readPluginEnabledSetting(setting.settingsPath);
+    if (enabled !== null) return { ...setting, enabled };
+  }
+  return null;
+}
+
+function destinationEnableRecoveryCommands(paths, destinationScope, setting = effectiveDestinationSetting(paths)) {
+  const scopes = ['user', 'project', 'local'];
+  const enableScope = setting?.enabled === false
+    && scopes.indexOf(setting.scope) > scopes.indexOf(destinationScope)
+    ? setting.scope : destinationScope;
+  return enableRecoveryCommands(destinationScope, enableScope);
 }
 
 function destinationExplicitlyDisabledError(paths, plugins, destinationScope) {
@@ -83,11 +95,11 @@ function destinationExplicitlyDisabledError(paths, plugins, destinationScope) {
   if (!destination || destination.enabled === true) {
     return null;
   }
-  const disabledSettingsPaths = destinationSettingsPaths(paths, destinationScope)
-    .filter(readExplicitlyDisabledSettings);
-  if (disabledSettingsPaths.length === 0) {
+  const effectiveSetting = effectiveDestinationSetting(paths);
+  if (!effectiveSetting || effectiveSetting.enabled !== false) {
     return null;
   }
+  const disabledSettingsPaths = [effectiveSetting.settingsPath];
   return migrationError(
     'DESTINATION_EXPLICITLY_DISABLED',
     `${CURRENT_PLUGIN_ID} is installed at ${destinationScope} scope but explicitly `
@@ -98,7 +110,7 @@ function destinationExplicitlyDisabledError(paths, plugins, destinationScope) {
       phase: 'destination-verification',
       observedScopes: installed.map(plugin => plugin.scope),
       settingsPaths: disabledSettingsPaths,
-      recovery: enableRecoveryCommands(destinationScope),
+      recovery: destinationEnableRecoveryCommands(paths, destinationScope, effectiveSetting),
     }
   );
 }
@@ -244,7 +256,7 @@ function verifySourceAndDestination(run, paths, migration, destinationScope, pha
         : `Could not verify ${CURRENT_PLUGIN_ID} at the destination before source cleanup.`,
       phase,
       recovery: destination && destination.enabled !== true
-        ? enableRecoveryCommands(destinationScope)
+        ? destinationEnableRecoveryCommands(paths, destinationScope)
         : recoveryCommands(null, destinationScope),
     }
   );
