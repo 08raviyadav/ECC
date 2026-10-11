@@ -209,6 +209,8 @@ test('a search confined to the target file name is a lookup, not a search', () =
     ['Grep', { pattern: 'tokenizer', glob: '**/tokenizer.js' }],
     ['Bash', { command: 'find src -name tokenizer.js' }],
     ['Bash', { command: 'rg -g tokenizer.js tokenizer src' }],
+    ['Bash', { command: 'rg -t js -g tokenizer.js tokenizer src' }],
+    ['Grep', { pattern: 'tokenizer', type: 'js', glob: 'tokenizer.js' }],
     ['Bash', { command: 'rg --files -g tokenizer.js src' }],
     ['Bash', { command: 'rg tokenizer src/**/tokenizer.js' }]
   ];

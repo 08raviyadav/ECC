@@ -377,10 +377,10 @@ function grepToolFilters(glob, type) {
   const filters = { positives: [], includes: [], exclusions: [], opaque: false };
   if (typeof type === 'string' && type) {
     const globs = rgTypeGlobs(type);
-    if (globs) filters.includes.push(...globs);
+    if (globs) filters.typeIncludes = globs;
     else filters.opaque = true;
   }
-  if (typeof glob !== 'string' || !glob) return filters;
+  if (typeof glob !== 'string' || !glob) return resolveTypeFilters(filters);
   for (const part of splitTopLevelCommas(glob)) {
     if (part.startsWith('!')) filters.exclusions.push(part.slice(1));
     else {
@@ -388,7 +388,18 @@ function grepToolFilters(glob, type) {
       filters.includes.push(part);
     }
   }
-  return filters;
+  return resolveTypeFilters(filters);
+}
+
+function resolveTypeFilters({ typeIncludes = [], typeExclusions = [], ...filters }) {
+  // rg's explicit positive globs override type selection, not union with it.
+  // Keep type alternatives separate until every explicit glob is known.
+  const hasIncludes = filters.includes.length > 0;
+  return {
+    ...filters,
+    includes: hasIncludes ? filters.includes : typeIncludes,
+    exclusions: filters.exclusions.concat(hasIncludes ? [] : typeExclusions)
+  };
 }
 
 function shellSearchFilters(kind, args) {
@@ -401,7 +412,7 @@ function shellSearchFilters(kind, args) {
     const consumed = applyShellFilterArg(kind, args, i, filters);
     i += consumed;
   }
-  return filters;
+  return resolveTypeFilters(filters);
 }
 
 function applyShellFilterArg(kind, args, i, filters) {
@@ -418,8 +429,10 @@ function applyShellFilterArg(kind, args, i, filters) {
   const type = (name, indexes, excluded) => {
     const globs = rgTypeGlobs(name);
     if (!globs) filters.opaque = true;
-    else if (excluded) globs.forEach(glob => exclude(glob, indexes));
-    else globs.forEach(include);
+    else if (excluded) {
+      filters.typeExclusions = (filters.typeExclusions || []).concat(globs);
+      indexes.forEach(index => filters.dropped.add(index));
+    } else filters.typeIncludes = (filters.typeIncludes || []).concat(globs);
   };
   const extension = value => include(value ? `*.${String(value).replace(/^\./, '')}` : '');
   if (kind.startsWith('git ') && GIT_EXCLUDE_PATHSPEC.test(arg)) {

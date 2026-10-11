@@ -41,7 +41,13 @@ function capture(phase, input) {
 }
 
 console.log('=== Actual registered observation secret redaction ===');
-if (process.platform !== 'win32' && spawnSync('python3', ['--version']).status === 0) {
+if (process.platform === 'win32') {
+  console.log('Skipping shell fixtures: native Windows runner requires platform CI.');
+} else if (spawnSync('python3', ['--version']).status !== 0) {
+  console.log('  FAIL python3 is required for observation redaction tests');
+  failed += 1;
+} else {
+  // Synthetic canary data proves that captured credential-shaped text is masked.
   for (const [label, content] of [
     ['double-quoted source', 'const apiKey = "CANARY_TOKEN_abcdefghijk";'],
     ['single-quoted source', "const password = 'CANARY_TOKEN_abcdefghijk';"],
@@ -61,8 +67,6 @@ if (process.platform !== 'win32' && spawnSync('python3', ['--version']).status =
       assert.ok(records.includes('[REDACTED]'));
     });
   }
-} else {
-  console.log('Skipping shell fixtures: native Windows runner requires platform CI.');
 }
 console.log(`Passed: ${passed}`);
 console.log(`Failed: ${failed}`);
