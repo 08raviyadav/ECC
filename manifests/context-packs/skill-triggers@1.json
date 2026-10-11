@@ -1,6 +1,6 @@
 {
   "coverage": {
-    "skills": 306,
+    "skills": 307,
     "withTriggers": 33
   },
   "generatedAt": "2026-09-24T23:51:22.784Z",
@@ -10,7 +10,7 @@
     "id": "hand-seeded",
     "source": "manual-curation-pending-regeneration"
   },
-  "registryDigest": "16549b53055bf5c106e51ca7fb2fe68f8a705b5f6bad40d388349320caedfa63",
+  "registryDigest": "89c0fbf05b8a7e811dbf788cf9a141199e13c961b69812c80b4cbdb019500c07",
   "schemaVersion": 1,
   "triggers": {
     "skill:agent-runtime-gateway-smoke-test": [
