@@ -320,13 +320,30 @@ function runTests() {
           duration_ms: 1,
           user_feedback: 'accepted',
           recorded_at: '2026-03-15T11:45:00.000Z',
-        })}\n{bad-json}\n`,
+        })}\n{bad-json}\nnull\n42\nfalse\n"not a record"\n[]\n`,
         'utf8'
       );
 
       const records = tracker.readSkillExecutionRecords({ runsFilePath: malformedRunsFile });
       assert.strictEqual(records.length, 1);
       assert.strictEqual(records[0].skill_id, 'alpha');
+      const report = health.collectSkillHealth({
+        repoRoot, homeDir, runsFilePath: malformedRunsFile, now,
+      });
+      assert.strictEqual(report.skills.find(skill => skill.skill_id === 'alpha').run_count_30d, 1);
+
+      const result = runCli([
+        '--json',
+        '--skills-root', skillsRoot,
+        '--learned-root', learnedRoot,
+        '--imported-root', importedRoot,
+        '--home', homeDir,
+        '--runs-file', malformedRunsFile,
+        '--now', now,
+      ]);
+      assert.strictEqual(result.status, 0, result.stderr);
+      const payload = JSON.parse(result.stdout);
+      assert.strictEqual(payload.skills.find(skill => skill.skill_id === 'alpha').run_count_30d, 1);
     })) passed++; else failed++;
 
     if (test('preserves zero-valued telemetry fields during normalization', () => {
