@@ -331,15 +331,16 @@ function project(dir, pending = {}) {
     }
   }
   const derived = {};
+  const cell = (title) => title.replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
   for (const rel of list('epics', EPIC_FILE)) {
     const slug = rel.match(EPIC_FILE)[1];
-    const rows = stories.filter((s) => s.epic === slug).map((s) => `| ${s.id} | ${s.title} | ${s.status} |`);
+    const rows = stories.filter((s) => s.epic === slug).map((s) => `| ${s.id} | ${cell(s.title)} | ${s.status} |`);
     const next = replaceTable(read(rel), rel, '| ID | Title | Status |\n| --- | --- | --- |', rows);
     if (next !== read(rel)) derived[rel] = next;
   }
   for (const rel of sprints) {
     const inSprint = stories.filter((s) => s.sprint === rel.match(SPRINT_FILE)[1]);
-    const rows = inSprint.map((s) => `| ${s.id} | ${s.title} | ${s.points} | ${s.status} |`);
+    const rows = inSprint.map((s) => `| ${s.id} | ${cell(s.title)} | ${s.points} | ${s.status} |`);
     const total = inSprint.reduce((sum, s) => sum + Number(s.points), 0);
     const next = replaceTable(read(rel), rel, '| ID | Title | Points | Status |\n| --- | --- | --- | --- |', rows)
       .replace(/^## Total Points:.*$/m, `## Total Points: ${total}`);

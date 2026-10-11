@@ -36,7 +36,7 @@ function fixture(update = false) {
   const changes = { [update ? 'update' : 'create']: Object.fromEntries(ids.map(id => [`${id}.md`, story(id, update ? 'in-progress' : 'todo')])) };
   return { root, ids, before, registryBefore: snapshot(path.join(root, '.git/story-lifecycle')), file: input(root, changes) };
 }
-function fault(root, { _update = false, recoveryFailure = false, cleanupFailure = false, journalRemovalFailure = false, releaseFailure = false } = {}) {
+function fault(root, { recoveryFailure = false, cleanupFailure = false, journalRemovalFailure = false, releaseFailure = false } = {}) {
   const file = path.join(root, 'bounded-fault.cjs');
   fs.writeFileSync(file, `const fs=require('node:fs');const path=require('node:path');
 const dir=${JSON.stringify(path.join(root, '.stories'))};const trace=${JSON.stringify(path.join(root, 'trace.json'))};
@@ -75,7 +75,7 @@ const tests = [
     ok(run(f.root, ['recover']));restored(f);
   }],
   ['failure after the committed journal marker does not undo a completed update', () => {
-    const f = fixture(true);const result = run(f.root, ['apply', '--input', f.file], fault(f.root, { update: true, cleanupFailure: true }));
+    const f = fixture(true);const result = run(f.root, ['apply', '--input', f.file], fault(f.root, { cleanupFailure: true }));
     assert.equal(result.status, 1);assert.match(result.stderr, /CLEANUP committed directory refused/);
     for (const id of f.ids) assert.equal(fs.readFileSync(path.join(f.root, '.stories', `${id}.md`), 'utf8'), story(id, 'in-progress'));
     assert.ok(!fs.existsSync(path.join(f.root, '.stories/.txn/journal.json')));
@@ -100,7 +100,7 @@ const tests = [
     restored(f);
   }]),
   ['rollback failure reports both errors, retains journal, and explicit retry restores all bytes', () => {
-    const f = fixture(true);const result = run(f.root, ['apply', '--input', f.file], fault(f.root, { update: true, recoveryFailure: true }));
+    const f = fixture(true);const result = run(f.root, ['apply', '--input', f.file], fault(f.root, { recoveryFailure: true }));
     assert.equal(result.status, 1);assert.match(result.stderr, /PRIMARY ordinary second publication/);assert.match(result.stderr, /RECOVERY backup restore refused/);assert.match(result.stderr, /recovery pending/i);
     assert.ok(fs.existsSync(path.join(f.root, '.stories/.txn/journal.json')));assert.ok(!fs.existsSync(path.join(f.root, '.stories/.lock')));
     const trace = JSON.parse(fs.readFileSync(path.join(f.root, 'trace.json')));assert.ok(trace.recoveryLocks.length > 0);assert.ok(trace.recoveryLocks.every(Boolean));

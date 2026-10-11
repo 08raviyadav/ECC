@@ -57,6 +57,21 @@ function assertStable(root, rel, expected) {
 }
 
 const tests = [
+  ...['Sign in | recover', String.raw`Sign\|in | recover`].flatMap(title => ['apply', 'reconcile'].map(command => [
+    `${command} preserves title table boundaries for ${JSON.stringify(title)}`, () => {
+      const root = newRepo();const [id] = run(root, ['allocate', '--epic', 'auth-flow']).ids;
+      write(root, 'sprints/sprint-1.md', `# Sprint 1\n\n${MARKER}\n${SPRINT_HEADER}\n\n## Total Points: 0\n`);
+      const raw = story(id, 'todo', '1').replace('Sign in', title);
+      if (command === 'apply') apply(root, { create: { [`${id}.md`]: raw } });
+      else { apply(root, { create: { [`${id}.md`]: story(id, 'todo', '1') } });write(root, `${id}.md`, raw);run(root, ['reconcile']); }
+      const cell = title === 'Sign in | recover' ? String.raw`Sign in \| recover` : String.raw`Sign\\\|in \| recover`;
+      assert.ok(read(root, 'epics/auth-flow.md').includes(`| ${id} | ${cell} | todo |\n`));
+      assert.ok(read(root, 'sprints/sprint-1.md').includes(`| ${id} | ${cell} | 3 | todo |\n`));
+      assert.equal(read(root, `${id}.md`), raw, 'source title bytes stay unchanged');
+      assertStable(root, 'epics/auth-flow.md', read(root, 'epics/auth-flow.md'));
+      assertStable(root, 'sprints/sprint-1.md', read(root, 'sprints/sprint-1.md'));
+    },
+  ])),
   ...['epic', 'sprint'].flatMap(kind => ['apply', 'reconcile'].flatMap(command => ['', '\n'].map(gap => [
     `${command} preserves a handwritten ${kind} table below an empty marker with gap ${JSON.stringify(gap)}`, () => {
       const root = newRepo();const rel = kind === 'epic' ? 'epics/auth-flow.md' : 'sprints/sprint-1.md';
