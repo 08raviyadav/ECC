@@ -269,6 +269,30 @@ async function runStrandedLock() {
   }
 }
 
+async function runCounterBoundary(initial, threshold, expected, forcePython) {
+  const { testDir, projectDir, testObserve } = buildSandbox();
+  try {
+    if (initial !== null) {
+      fs.writeFileSync(path.join(projectDir, '.observer-signal-counter'), initial);
+    }
+    const extraEnv = { ECC_OBSERVER_SIGNAL_EVERY_N: String(threshold) };
+    if (forcePython || !hasFlock) {
+      const bashEnv = path.join(testDir, 'no-flock.sh');
+      const fixture = forcePython
+        ? 'command() { if [ "$1" = "-v" ] && [ "$2" = "flock" ]; then return 1; fi; builtin command "$@"; }\n'
+        // Exercise the real shell counter on macOS with an inherited-fd OS
+        // lock fixture. Native GNU flock remains a Linux platform check.
+        : `flock() { python3 -c 'import fcntl,sys; fcntl.flock(int(sys.argv[-1]), fcntl.LOCK_UN if sys.argv[1] == "-u" else fcntl.LOCK_EX)' "$@"; }\n`;
+      fs.writeFileSync(bashEnv, fixture);
+      extraEnv.BASH_ENV = bashEnv;
+    }
+    await runObserve(testObserve, projectDir, extraEnv);
+    assert.strictEqual(readCounter(projectDir), expected);
+  } finally {
+    cleanupDir(testDir);
+  }
+}
+
 async function runKilledOwner() {
   const { testDir, projectDir, testObserve } = buildSandbox();
   let owner;
@@ -305,6 +329,17 @@ async function runKilledOwner() {
     await asyncTest('concurrent invocations never lose a counter increment', runConcurrent);
     await asyncTest('stranded mkdir lock cannot delay or freeze later observations', runStrandedLock);
     await asyncTest('busy lock skips safely and a killed owner releases it automatically', runKilledOwner);
+    for (const forcePython of [false, true]) {
+      const label = forcePython ? 'Python fallback' : hasFlock ? 'flock' : 'shell counter with OS-lock fixture';
+      await asyncTest(`${label} applies threshold one to a missing first counter`,
+        () => runCounterBoundary(null, 1, 0, forcePython));
+      await asyncTest(`${label} resets a malformed counter before incrementing`,
+        () => runCounterBoundary('invalid\n', 2, 1, forcePython));
+      await asyncTest(`${label} resets an oversized counter before incrementing`,
+        () => runCounterBoundary('9'.repeat(5000) + '\n', 2, 1, forcePython));
+      await asyncTest(`${label} parses leading-zero counters as decimal`,
+        () => runCounterBoundary('08\n', 20, 9, forcePython));
+    }
   } else {
     console.log('  - skipping shell-execution tests (requires non-Windows + python3)');
   }
