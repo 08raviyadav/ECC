@@ -441,8 +441,7 @@ closes and locks excess PRs, including drafts. More than ten submissions within
 still count toward the window. Contributors with repository write access bypass
 this policy. Maintainers can review exceptions through the moderation alert.
 
-The repository also supports GitHub's native concurrent open-PR cap, configured
-separately by an administrator. See the [moderation runbook](.github/PR_MODERATION.md)
+See the [moderation runbook](.github/PR_MODERATION.md)
 for activation, credential requirements, and recovery.
 
 ### 1. PR Title Format
